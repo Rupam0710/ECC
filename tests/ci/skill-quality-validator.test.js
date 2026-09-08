@@ -165,6 +165,34 @@ Be brief.
     assert.match(strictResult.stderr || strictResult.stdout, /very short and may not provide enough guidance/i);
   });
 
+  check('rejects empty required sections in strict mode', () => {
+    const result = runValidator({
+      'skills/empty-sections/SKILL.md': `---
+name: empty-sections
+description: Synthetic skill with empty required sections.
+---
+# Empty Sections
+
+## When to Activate
+TODO
+
+## Core Concepts
+placeholder
+
+## Examples
+TBD
+
+## Anti-Patterns
+N/A
+
+## Best Practices
+-
+`,
+    }, ['--strict']);
+    assert.notStrictEqual(result.status, 0, 'Expected strict mode to fail for empty or placeholder sections');
+    assert.match(result.stderr || result.stdout, /When to Activate|Core Concepts|Examples|Anti-Patterns|Best Practices/i);
+  });
+
   check('rejects syntactically invalid YAML frontmatter', () => {
     const result = runValidator({
       'skills/bad-frontmatter/SKILL.md': `---

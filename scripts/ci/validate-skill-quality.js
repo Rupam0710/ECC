@@ -61,6 +61,12 @@ function readFileSafe(filePath) {
   }
 }
 
+function extractSectionBody(markdown, sectionTitle) {
+  const escapedTitle = sectionTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = markdown.match(new RegExp(`^##?\\s*${escapedTitle}\\s*\n+([\s\S]*?)(?=^##?\\s*(?:${REQUIRED_SECTIONS.map((title) => title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\s*$|\Z)`, 'm'));
+  return match ? match[1].trim() : '';
+}
+
 function findMissingSections(markdown) {
   const missing = [];
   for (const section of REQUIRED_SECTIONS) {
@@ -70,6 +76,21 @@ function findMissingSections(markdown) {
     }
   }
   return missing;
+}
+
+function findEmptySections(markdown) {
+  const empty = [];
+  for (const section of REQUIRED_SECTIONS) {
+    const body = extractSectionBody(markdown, section);
+    const normalized = body.replace(/[`*_~>#\-\s]/g, '').toLowerCase();
+    if (!normalized || ['todo', 'tbd', 'n/a', 'na', 'placeholder'].includes(normalized)) {
+      const heading = new RegExp(`^##?\\s*${section.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'm');
+      if (heading.test(markdown)) {
+        empty.push(section);
+      }
+    }
+  }
+  return empty;
 }
 
 function scanSecrets(markdown) {
@@ -143,6 +164,15 @@ function validateSkillFile(skillFile) {
     const missingText = missingSections.join(', ');
     logError(`${relativePath} is missing required sections: ${missingText}`);
     ok = false;
+  }
+
+  if (STRICT) {
+    const emptySections = findEmptySections(contents);
+    if (emptySections.length > 0) {
+      const emptyText = emptySections.join(', ');
+      logError(`${relativePath} has empty or placeholder-only required sections: ${emptyText}`);
+      ok = false;
+    }
   }
 
   const badSecrets = scanSecrets(contents);
