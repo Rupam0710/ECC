@@ -10,7 +10,7 @@ const { spawnSync } = require('child_process');
 
 const SCRIPT_PATH = path.join(__dirname, '..', '..', 'scripts', 'ci', 'validate-skill-quality.js');
 
-function runValidator(files, extraArgs = []) {
+function runValidator(files, extraArgs = [], cwd = null) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-skill-quality-'));
   try {
     for (const [name, contents] of Object.entries(files)) {
@@ -20,6 +20,7 @@ function runValidator(files, extraArgs = []) {
     }
 
     const result = spawnSync('node', [SCRIPT_PATH, ...extraArgs], {
+      cwd: cwd || tempDir,
       encoding: 'utf8',
       env: {
         ...process.env,
@@ -220,7 +221,91 @@ Avoid broken YAML.
 `,
     });
     assert.notStrictEqual(result.status, 0, 'Expected invalid YAML to fail');
-    assert.match(result.stderr || result.stdout, /missing YAML frontmatter|invalid YAML|frontmatter/i);
+    assert.match(result.stderr || result.stdout, /invalid YAML frontmatter/i);
+  });
+
+  check('defaults to the repo skills directory when no target is provided', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-skill-default-target-'));
+    try {
+      const skillPath = path.join(tempDir, 'skills', 'default-skill', 'SKILL.md');
+      fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+      fs.writeFileSync(skillPath, `---
+name: default-skill
+description: Valid default target skill.
+---
+# Default Skill
+
+## When to Activate
+Use for validation.
+
+## Core Concepts
+Be explicit.
+
+## Examples
+\`\`\`bash
+echo ok
+\`\`\`
+
+## Anti-Patterns
+Avoid vague instructions.
+
+## Best Practices
+- Keep it concrete.
+`, 'utf8');
+
+      const result = spawnSync('node', [SCRIPT_PATH], {
+        cwd: tempDir,
+        encoding: 'utf8',
+        env: { ...process.env },
+      });
+
+      assert.strictEqual(result.status, 0, `${result.stderr || result.stdout}`);
+      assert.match(result.stdout || result.stderr, /Validated 1 skill file\(s\) successfully\./i);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  check('accepts a single SKILL.md target file without crashing', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-skill-single-target-'));
+    try {
+      const skillPath = path.join(tempDir, 'skills', 'single-target', 'SKILL.md');
+      fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+      fs.writeFileSync(skillPath, `---
+name: single-target
+description: Valid single-file target.
+---
+# Single Target
+
+## When to Activate
+Use when validating one skill file.
+
+## Core Concepts
+Check directly.
+
+## Examples
+\`\`\`bash
+echo ok
+\`\`\`
+
+## Anti-Patterns
+Avoid generic input.
+
+## Best Practices
+- Keep it concise.
+`, 'utf8');
+
+      const result = spawnSync('node', [SCRIPT_PATH, path.join('skills', 'single-target', 'SKILL.md')], {
+        cwd: tempDir,
+        encoding: 'utf8',
+        env: { ...process.env },
+      });
+
+      assert.strictEqual(result.status, 0, `${result.stderr || result.stdout}`);
+      assert.match(result.stdout || result.stderr, /Validated 1 skill file\(s\) successfully\./i);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   console.log(`\nPassed: ${passed}`);

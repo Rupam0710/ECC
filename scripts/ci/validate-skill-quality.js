@@ -44,6 +44,10 @@ const SECRET_PATTERNS = [
   /xox[baprs]-[A-Za-z0-9-]+/i,
 ];
 
+function logInfo(message) {
+  console.info(message);
+}
+
 function logError(message) {
   console.error(`ERROR: ${message}`);
 }
@@ -62,7 +66,8 @@ function readFileSafe(filePath) {
 
 function extractSectionBody(markdown, sectionTitle) {
   const escapedTitle = sectionTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = markdown.match(new RegExp(String.raw`^##?\s*${escapedTitle}\s*\n+([\s\S]*?)(?=^##?\s*(?:${REQUIRED_SECTIONS.map((title) => title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\s*$|\Z)`, 'm'));
+  const sectionPattern = REQUIRED_SECTIONS.map((title) => title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const match = markdown.match(new RegExp(String.raw`^##?\s*${escapedTitle}\s*\n+([\s\S]*?)(?=^##?\s*(?:${sectionPattern})\s*$|$)`, 'm'));
   return match ? match[1].trim() : '';
 }
 
@@ -103,8 +108,15 @@ function scanSecrets(markdown) {
   return matches;
 }
 
-function getSkillFiles(rootDir) {
-  if (!fs.existsSync(rootDir)) return [];
+function getSkillFiles(targetPath) {
+  if (!targetPath || !fs.existsSync(targetPath)) return [];
+
+  const targetStat = fs.statSync(targetPath);
+  if (targetStat.isFile()) {
+    return path.basename(targetPath) === 'SKILL.md' ? [targetPath] : [];
+  }
+
+  if (!targetStat.isDirectory()) return [];
 
   const files = [];
 
@@ -120,7 +132,7 @@ function getSkillFiles(rootDir) {
     }
   }
 
-  walk(rootDir);
+  walk(targetPath);
   return files.sort();
 }
 
@@ -196,18 +208,25 @@ function validateSkillFile(skillFile) {
 
 function main() {
   const cliArgs = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
-  const explicitTarget = cliArgs[0] || process.env.ECC_SKILLS_DIR;
+  const explicitTarget = cliArgs[0] || process.env.ECC_SKILLS_DIR || 'skills';
+  const targetPath = path.resolve(process.cwd(), explicitTarget);
 
-  if (!explicitTarget) {
-    console.log('No skill path provided; skipping repo-wide skill quality validation. Pass a target file or directory to validate it explicitly.');
-    process.exit(0);
+  if (!fs.existsSync(targetPath)) {
+    logError(`Target does not exist: ${targetPath}`);
+    process.exit(1);
   }
 
-  const skillsDir = path.resolve(process.cwd(), explicitTarget);
-  const files = getSkillFiles(skillsDir);
+  const files = getSkillFiles(targetPath);
+
+  if (fs.statSync(targetPath).isFile()) {
+    if (path.basename(targetPath) !== 'SKILL.md') {
+      logError(`Unsupported target file: ${targetPath}. Provide a SKILL.md file.`);
+      process.exit(1);
+    }
+  }
 
   if (files.length === 0) {
-    console.log(`No skill files found under ${skillsDir}`);
+    logInfo(`No skill files found under ${targetPath}`);
     process.exit(0);
   }
 
@@ -221,7 +240,7 @@ function main() {
     process.exit(1);
   }
 
-  console.log(`Validated ${files.length} skill file(s) successfully.`);
+  logInfo(`Validated ${files.length} skill file(s) successfully.`);
 }
 
 main();
