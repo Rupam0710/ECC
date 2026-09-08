@@ -67,7 +67,7 @@ function readFileSafe(filePath) {
 function extractSectionBody(markdown, sectionTitle) {
   const escapedTitle = sectionTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const sectionPattern = REQUIRED_SECTIONS.map((title) => title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-  const match = markdown.match(new RegExp(String.raw`^##?\s*${escapedTitle}\s*\n+([\s\S]*?)(?=^##?\s*(?:${sectionPattern})\s*$|$)`, 'm'));
+  const match = markdown.match(new RegExp(`^##?\\s*${escapedTitle}\\s*\\n+([\\s\\S]*?)(?=^##?\\s*(?:${sectionPattern})\\s*$|$)`, 'm'));
   return match ? match[1].trim() : '';
 }
 

@@ -85,6 +85,35 @@ Avoid generic advice.
     assert.strictEqual(result.status, 0, `${result.stderr || result.stdout}`);
   });
 
+  check('handles the final required section without unsupported end-of-input assertions', () => {
+    const result = runValidator({
+      'skills/final-section/SKILL.md': `---
+name: final-section
+description: Regression check for final section parsing.
+---
+# Final Section
+
+## When to Activate
+Use when a final section should still parse.
+
+## Core Concepts
+This section is intentionally complete.
+
+## Examples
+\`\`\`bash
+echo ready
+\`\`\`
+
+## Anti-Patterns
+Avoid weak guidance.
+
+## Best Practices
+- Keep the section concrete and final.
+`,
+    });
+    assert.strictEqual(result.status, 0, `${result.stderr || result.stdout}`);
+  });
+
   check('reports missing activation section', () => {
     const result = runValidator({
       'skills/weak-skill/SKILL.md': `---
