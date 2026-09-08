@@ -11,7 +11,6 @@ const fs = require('fs');
 const path = require('path');
 const yaml = require('js-yaml');
 
-const DEFAULT_SKILLS_DIR = path.join(__dirname, '../../skills');
 const STRICT = process.argv.includes('--strict') || process.env.CI_STRICT_SKILLS === '1';
 
 function parseFrontmatter(content) {
@@ -25,7 +24,7 @@ function parseFrontmatter(content) {
       return { __invalid: true };
     }
     return parsed;
-  } catch (error) {
+  } catch {
     return { __invalid: true };
   }
 }
@@ -39,7 +38,7 @@ const REQUIRED_SECTIONS = [
 ];
 
 const SECRET_PATTERNS = [
-  /(?:api[_-]?key|token|secret|passwd|password|access[_-]?key)[\s:=\"']+[A-Za-z0-9_\-]{8,}/i,
+  /(?:api[_-]?key|token|secret|passwd|password|access[_-]?key)[\s:="']+[A-Za-z0-9_-]{8,}/i,
   /sk_(?:live|test)_[A-Za-z0-9]+/i,
   /ghp_[A-Za-z0-9]{20,}/i,
   /xox[baprs]-[A-Za-z0-9-]+/i,
@@ -56,14 +55,14 @@ function logWarning(message) {
 function readFileSafe(filePath) {
   try {
     return fs.readFileSync(filePath, 'utf8');
-  } catch (error) {
+  } catch {
     return null;
   }
 }
 
 function extractSectionBody(markdown, sectionTitle) {
   const escapedTitle = sectionTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = markdown.match(new RegExp(`^##?\\s*${escapedTitle}\\s*\n+([\s\S]*?)(?=^##?\\s*(?:${REQUIRED_SECTIONS.map((title) => title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\s*$|\Z)`, 'm'));
+  const match = markdown.match(new RegExp(String.raw`^##?\s*${escapedTitle}\s*\n+([\s\S]*?)(?=^##?\s*(?:${REQUIRED_SECTIONS.map((title) => title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\s*$|\Z)`, 'm'));
   return match ? match[1].trim() : '';
 }
 
