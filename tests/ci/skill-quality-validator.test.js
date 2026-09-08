@@ -133,31 +133,66 @@ Avoid leaked variables.
     assert.match(result.stderr || result.stdout, /secret|token|API_KEY/i);
   });
 
-  check('supports --strict mode for missing anti-patterns', () => {
-    const result = runValidator({
-      'skills/no-anti-patterns/SKILL.md': `---
-name: no-anti-patterns
-description: A basic skill.
+  check('supports strict-only length validation when every required section is present', () => {
+    const shortValidSkill = `---
+name: short-valid-skill
+description: Very short skill.
 ---
-# No Anti-Patterns
+# S
+## When to Activate
+Use.
+## Core Concepts
+One.
+## Examples
+\`\`\`bash
+echo hi
+\`\`\`
+## Anti-Patterns
+Avoid.
+## Best Practices
+Be brief.
+`;
+
+    const normalResult = runValidator({
+      'skills/short-valid-skill/SKILL.md': shortValidSkill,
+    });
+    assert.strictEqual(normalResult.status, 0, `Expected non-strict run to pass: ${normalResult.stderr || normalResult.stdout}`);
+
+    const strictResult = runValidator({
+      'skills/short-valid-skill/SKILL.md': shortValidSkill,
+    }, ['--strict']);
+    assert.notStrictEqual(strictResult.status, 0, 'Expected strict mode to fail');
+    assert.match(strictResult.stderr || strictResult.stdout, /very short and may not provide enough guidance/i);
+  });
+
+  check('rejects syntactically invalid YAML frontmatter', () => {
+    const result = runValidator({
+      'skills/bad-frontmatter/SKILL.md': `---
+name: [broken
+description: invalid frontmatter
+---
+# Broken
 
 ## When to Activate
-Use when the task is simple.
+Use this when you need it.
 
 ## Core Concepts
-Keep it simple.
+This is malformed YAML.
 
 ## Examples
 \`\`\`bash
-echo hello
+echo bad
 \`\`\`
 
+## Anti-Patterns
+Avoid broken YAML.
+
 ## Best Practices
-- Keep it simple.
+- Validate input.
 `,
-    }, ['--strict']);
-    assert.notStrictEqual(result.status, 0, 'Expected strict mode to fail');
-    assert.match(result.stderr || result.stdout, /Anti-Patterns/i);
+    });
+    assert.notStrictEqual(result.status, 0, 'Expected invalid YAML to fail');
+    assert.match(result.stderr || result.stdout, /missing YAML frontmatter|invalid YAML|frontmatter/i);
   });
 
   console.log(`\nPassed: ${passed}`);

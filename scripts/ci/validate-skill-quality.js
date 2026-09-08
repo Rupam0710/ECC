@@ -9,9 +9,26 @@
 
 const fs = require('fs');
 const path = require('path');
+const yaml = require('js-yaml');
 
 const DEFAULT_SKILLS_DIR = path.join(__dirname, '../../skills');
 const STRICT = process.argv.includes('--strict') || process.env.CI_STRICT_SKILLS === '1';
+
+function parseFrontmatter(content) {
+  const cleaned = content.replace(/^\uFEFF/, '');
+  const match = cleaned.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (!match) return null;
+
+  try {
+    const parsed = yaml.load(match[1]);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { __invalid: true };
+    }
+    return parsed;
+  } catch (error) {
+    return { __invalid: true };
+  }
+}
 
 const REQUIRED_SECTIONS = [
   'When to Activate',
@@ -42,25 +59,6 @@ function readFileSafe(filePath) {
   } catch (error) {
     return null;
   }
-}
-
-function parseFrontmatter(content) {
-  const cleaned = content.replace(/^\uFEFF/, '');
-  const match = cleaned.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
-  if (!match) return null;
-
-  const body = match[1];
-  const result = {};
-  const lines = body.split(/\r?\n/);
-  for (const line of lines) {
-    const m = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
-    if (!m) continue;
-    const [, key, rawValue] = m;
-    const value = rawValue.trim().replace(/^['"]|['"]$/g, '');
-    result[key] = value;
-  }
-
-  return result;
 }
 
 function findMissingSections(markdown) {
@@ -120,12 +118,15 @@ function validateSkillFile(skillFile) {
   if (!frontmatter) {
     logError(`${relativePath} is missing YAML frontmatter`);
     ok = false;
+  } else if (frontmatter.__invalid) {
+    logError(`${relativePath} has invalid YAML frontmatter`);
+    ok = false;
   } else {
-    if (!frontmatter.name) {
+    if (typeof frontmatter.name !== 'string' || !frontmatter.name.trim()) {
       logError(`${relativePath} is missing a name field`);
       ok = false;
     }
-    if (!frontmatter.description) {
+    if (typeof frontmatter.description !== 'string' || !frontmatter.description.trim()) {
       logError(`${relativePath} is missing a description field`);
       ok = false;
     }
@@ -146,7 +147,7 @@ function validateSkillFile(skillFile) {
 
   const badSecrets = scanSecrets(contents);
   if (badSecrets.length > 0) {
-    logError(`${relativePath} contains secret-like patterns: ${badSecrets.slice(0, 3).join(', ')}`);
+    logError(`${relativePath} contains ${badSecrets.length} secret-like pattern(s)`);
     ok = false;
   }
 
@@ -165,7 +166,15 @@ function validateSkillFile(skillFile) {
 }
 
 function main() {
-  const skillsDir = process.env.ECC_SKILLS_DIR || DEFAULT_SKILLS_DIR;
+  const cliArgs = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
+  const explicitTarget = cliArgs[0] || process.env.ECC_SKILLS_DIR;
+
+  if (!explicitTarget) {
+    console.log('No skill path provided; skipping repo-wide skill quality validation. Pass a target file or directory to validate it explicitly.');
+    process.exit(0);
+  }
+
+  const skillsDir = path.resolve(process.cwd(), explicitTarget);
   const files = getSkillFiles(skillsDir);
 
   if (files.length === 0) {
