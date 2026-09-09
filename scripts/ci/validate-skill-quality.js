@@ -59,16 +59,37 @@ function logWarning(message) {
 function readFileSafe(filePath) {
   try {
     return fs.readFileSync(filePath, 'utf8');
-  } catch {
+  } catch (error) {
+    const message = error && error.message ? error.message : 'unknown read error';
+    logError(`${filePath} could not be read: ${message}`);
     return null;
   }
 }
 
 function extractSectionBody(markdown, sectionTitle) {
-  const escapedTitle = sectionTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const sectionPattern = REQUIRED_SECTIONS.map((title) => title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-  const match = markdown.match(new RegExp(`^##?\\s*${escapedTitle}\\s*\\n+([\\s\\S]*?)(?=^##?\\s*(?:${sectionPattern})\\s*$|$)`, 'm'));
-  return match ? match[1].trim() : '';
+  const headingPattern = new RegExp(`^##?\\s*${sectionTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`);
+  const sectionHeadings = new Set(REQUIRED_SECTIONS);
+  const lines = markdown.split(/\r?\n/);
+  let inTargetSection = false;
+  let bodyLines = [];
+
+  for (const line of lines) {
+    if (headingPattern.test(line)) {
+      inTargetSection = true;
+      continue;
+    }
+
+    if (!inTargetSection) continue;
+
+    const headingMatch = line.match(/^##?\s*(.+?)\s*$/);
+    if (headingMatch && sectionHeadings.has(headingMatch[1].trim())) {
+      break;
+    }
+
+    bodyLines.push(line);
+  }
+
+  return bodyLines.join('\n').trim();
 }
 
 function findMissingSections(markdown) {
@@ -216,14 +237,18 @@ function main() {
     process.exit(1);
   }
 
-  const files = getSkillFiles(targetPath);
-
-  if (fs.statSync(targetPath).isFile()) {
-    if (path.basename(targetPath) !== 'SKILL.md') {
-      logError(`Unsupported target file: ${targetPath}. Provide a SKILL.md file.`);
-      process.exit(1);
-    }
+  const targetStat = fs.statSync(targetPath);
+  if (!targetStat.isFile() && !targetStat.isDirectory()) {
+    logError(`Unsupported target type: ${targetPath}. Provide a SKILL.md file or a directory of skill files.`);
+    process.exit(1);
   }
+
+  if (targetStat.isFile() && path.basename(targetPath) !== 'SKILL.md') {
+    logError(`Unsupported target file: ${targetPath}. Provide a SKILL.md file.`);
+    process.exit(1);
+  }
+
+  const files = getSkillFiles(targetPath);
 
   if (files.length === 0) {
     logInfo(`No skill files found under ${targetPath}`);
