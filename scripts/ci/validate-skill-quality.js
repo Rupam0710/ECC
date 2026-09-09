@@ -24,7 +24,9 @@ function parseFrontmatter(content) {
       return { __invalid: true };
     }
     return parsed;
-  } catch {
+  } catch (error) {
+    const message = error && error.message ? error.message : 'unknown YAML parse error';
+    logError(`YAML frontmatter parse failed: ${message}`);
     return { __invalid: true };
   }
 }
@@ -67,22 +69,23 @@ function readFileSafe(filePath) {
 }
 
 function extractSectionBody(markdown, sectionTitle) {
-  const headingPattern = new RegExp(`^##?\\s*${sectionTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`);
-  const sectionHeadings = new Set(REQUIRED_SECTIONS);
+  const headingPattern = new RegExp(`^#{1,3}\\s*${sectionTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`);
+  const sectionHeadings = new Set(REQUIRED_SECTIONS.map((title) => title.trim()));
   const lines = markdown.split(/\r?\n/);
   let inTargetSection = false;
-  let bodyLines = [];
+  const bodyLines = [];
 
   for (const line of lines) {
-    if (headingPattern.test(line)) {
-      inTargetSection = true;
+    const trimmed = line.trim();
+    if (!inTargetSection) {
+      if (headingPattern.test(trimmed)) {
+        inTargetSection = true;
+      }
       continue;
     }
 
-    if (!inTargetSection) continue;
-
-    const headingMatch = line.match(/^##?\s*(.+?)\s*$/);
-    if (headingMatch && sectionHeadings.has(headingMatch[1].trim())) {
+    const nextHeadingMatch = trimmed.match(/^#{1,3}\s*(.+?)\s*$/);
+    if (nextHeadingMatch && sectionHeadings.has(nextHeadingMatch[1].trim())) {
       break;
     }
 
@@ -132,7 +135,14 @@ function scanSecrets(markdown) {
 function getSkillFiles(targetPath) {
   if (!targetPath || !fs.existsSync(targetPath)) return [];
 
-  const targetStat = fs.statSync(targetPath);
+  let targetStat;
+  try {
+    targetStat = fs.statSync(targetPath);
+  } catch (error) {
+    logError(`Unable to inspect target path ${targetPath}: ${error && error.message ? error.message : 'unknown filesystem error'}`);
+    return [];
+  }
+
   if (targetStat.isFile()) {
     return path.basename(targetPath) === 'SKILL.md' ? [targetPath] : [];
   }
@@ -142,7 +152,14 @@ function getSkillFiles(targetPath) {
   const files = [];
 
   function walk(currentDir) {
-    const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    let entries;
+    try {
+      entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    } catch (error) {
+      logError(`Unable to read directory ${currentDir}: ${error && error.message ? error.message : 'unknown filesystem error'}`);
+      return;
+    }
+
     for (const entry of entries) {
       const fullPath = path.join(currentDir, entry.name);
       if (entry.isDirectory()) {
