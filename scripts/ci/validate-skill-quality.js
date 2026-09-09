@@ -133,23 +133,27 @@ function scanSecrets(markdown) {
 }
 
 function getSkillFiles(targetPath) {
-  if (!targetPath || !fs.existsSync(targetPath)) return [];
+  if (!targetPath || !fs.existsSync(targetPath)) return { files: [], unreadablePaths: [] };
 
   let targetStat;
   try {
     targetStat = fs.statSync(targetPath);
   } catch (error) {
     logError(`Unable to inspect target path ${targetPath}: ${error && error.message ? error.message : 'unknown filesystem error'}`);
-    return [];
+    return { files: [], unreadablePaths: [targetPath] };
   }
 
   if (targetStat.isFile()) {
-    return path.basename(targetPath) === 'SKILL.md' ? [targetPath] : [];
+    return {
+      files: path.basename(targetPath) === 'SKILL.md' ? [targetPath] : [],
+      unreadablePaths: [],
+    };
   }
 
-  if (!targetStat.isDirectory()) return [];
+  if (!targetStat.isDirectory()) return { files: [], unreadablePaths: [] };
 
   const files = [];
+  const unreadablePaths = [];
 
   function walk(currentDir) {
     let entries;
@@ -157,6 +161,7 @@ function getSkillFiles(targetPath) {
       entries = fs.readdirSync(currentDir, { withFileTypes: true });
     } catch (error) {
       logError(`Unable to read directory ${currentDir}: ${error && error.message ? error.message : 'unknown filesystem error'}`);
+      unreadablePaths.push(currentDir);
       return;
     }
 
@@ -171,7 +176,7 @@ function getSkillFiles(targetPath) {
   }
 
   walk(targetPath);
-  return files.sort();
+  return { files: files.sort(), unreadablePaths };
 }
 
 function validateSkillFile(skillFile) {
@@ -265,7 +270,12 @@ function main() {
     process.exit(1);
   }
 
-  const files = getSkillFiles(targetPath);
+  const { files, unreadablePaths } = getSkillFiles(targetPath);
+
+  if (unreadablePaths.length > 0) {
+    logError(`Validation aborted because one or more target directories could not be read: ${unreadablePaths.join(', ')}`);
+    process.exit(1);
+  }
 
   if (files.length === 0) {
     logInfo(`No skill files found under ${targetPath}`);
