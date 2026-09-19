@@ -16,8 +16,8 @@
 import type { PluginInput } from "@opencode-ai/plugin"
 import * as fs from "fs"
 import * as path from "path"
-import changedFilesTool from "../tools/changed-files.js"
-import dependencyAnalyzerTool from "../tools/dependency-analyzer.js"
+import changedFilesTool from "../tools/changed-files.ts"
+import dependencyAnalyzerTool from "../tools/dependency-analyzer.ts"
 
 /**
  * Type definitions for better type safety
@@ -111,9 +111,9 @@ export const ECCHooksPlugin: ECCHooksPluginFn = async ({
   // This plugin is OpenCode's startup entry point, so a static import
   // failure here previously crashed the whole plugin -- and with it, the
   // entire OpenCode session -- before any hooks could load (see #2530).
-  let changedFilesStore: typeof import("./lib/changed-files-store.js") | undefined
+  let changedFilesStore: typeof import("./lib/changed-files-store.ts") | undefined
   try {
-    const store = await import("./lib/changed-files-store.js")
+    const store = await import("./lib/changed-files-store.ts")
     store.initStore(worktreePath)
     changedFilesStore = store
   } catch {
@@ -537,7 +537,7 @@ export const ECCHooksPlugin: ECCHooksPluginFn = async ({
       const contextBlock = [
         "# ECC Context (preserve across compaction)",
         "",
-        "## Active Plugin: ECC v2.2.1",
+        "## Active Plugin: ECC v2.2.2",
         "- Hooks: file.edited, tool.execute.before/after, session.created/idle/deleted, shell.env, compacting, permission.ask",
         "- Tools: run-tests, check-coverage, security-audit, format-code, lint-check, git-summary, changed-files",
         "- Agents: 13 specialized (planner, architect, tdd-guide, code-reviewer, security-reviewer, build-error-resolver, e2e-runner, refactor-cleaner, doc-updater, go-reviewer, go-build-resolver, database-reviewer, python-reviewer)",
