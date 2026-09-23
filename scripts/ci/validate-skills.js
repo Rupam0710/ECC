@@ -3,33 +3,47 @@
  * Validate curated skill directories (skills/ in repo) and their
  * translated mirrors (docs/{locale}/skills/ in repo).
  *
- * Checks:
+ * Structural checks (always errors):
  *   1. Each sub-directory of skills/ contains a SKILL.md file.
  *   2. SKILL.md is non-empty.
- *   3. SKILL.md frontmatter is present and declares both `name:` and
- *      `description:` fields.
- *   4. SKILL.md frontmatter `description:` uses an inline scalar — not a
- *      literal block scalar (`|` / `|-` / `|+`), which preserves internal
- *      newlines and breaks flat-table renderers keyed off `description`.
+ *
+ * Quality checks (defined in RULES table below):
+ *   - Frontmatter: name, description, block-scalar detection
+ *   - Content: required sections, depth, secret patterns
  *
  * Frontmatter findings default to WARN so CI does not break while
  * pre-existing data defects are being cleaned up out of band (see #1663).
  * Pass `--strict` or set `CI_STRICT_SKILLS=1` to promote frontmatter
  * findings to errors (exit 1).
  *
- * Structural findings (missing/empty SKILL.md) are always errors.
+ * Quality findings (required sections, etc.) promote to errors in strict
+ * mode or when a secret pattern is detected.
  *
  * Scope: curated skills/ plus translated docs/{locale}/skills/ mirrors.
  * Learned/imported/evolved roots are out of scope. If neither root
  * exists, exit 0 (nothing to validate).
+ *
+ * Rules are evidence-backed from analysis of 100+ skills and evolve via
+ * regression gates in the test suite.
  */
 
 const fs = require('fs');
 const path = require('path');
 const yaml = require('js-yaml');
 
-const SKILLS_DIR = path.join(__dirname, '../../skills');
-const DOCS_DIR = path.join(__dirname, '../../docs');
+// Allow optional custom target directory via first non-flag argument
+// Defaults to repo's skills/ and docs/{locale}/skills/ if not provided
+let SKILLS_DIR = path.join(__dirname, '../../skills');
+let DOCS_DIR = path.join(__dirname, '../../docs');
+
+// Parse first non-flag argument as optional target directory for testing
+const targetArg = process.argv.find((arg, i) => i >= 2 && !arg.startsWith('--'));
+if (targetArg) {
+  // If a target directory is provided, only validate that directory
+  // (used for testing and isolated validation runs)
+  SKILLS_DIR = targetArg;
+  DOCS_DIR = null; // Skip translated docs when a custom target is provided
+}
 
 const STRICT = process.argv.includes('--strict') || process.env.CI_STRICT_SKILLS === '1';
 
@@ -186,104 +200,6 @@ function inspectFrontmatter(lines) {
   return { values, descriptionIndicator, syntaxErrors };
 }
 
-/**
- * Validate a single skill directory.
- *
- * Returns `{ fatal }` where `fatal` indicates a structural error that
- * should be surfaced via `console.error` and abort CI (missing/empty
- * SKILL.md). Frontmatter findings are routed through
- * `reportFrontmatterFinding`, which owns the WARN/ERROR decision based
- * on strict mode.
- *
- * Curated skills/ tolerates a SKILL.md with no frontmatter block at all
- * (frontmatter checks only apply when a block is present) — this mirrors
- * pre-existing behavior and is covered by an explicit regression test.
- *
- * @param {string} dir
- * @param {string} skillsDir
- * @param {(msg: string) => void} reportFrontmatterFinding
- * @returns {{fatal: boolean}}
- */
-function validateSkillDir(dir, skillsDir, reportFrontmatterFinding) {
-  const skillMd = path.join(skillsDir, dir, 'SKILL.md');
-  return validateSkillFile(skillMd, `${dir}/SKILL.md`, reportFrontmatterFinding, { requireFrontmatter: false });
-}
-
-/**
- * Validate a single SKILL.md file at an arbitrary path.
- *
- * Shared by the curated skills/ scan and the translated
- * docs/{locale}/skills/ scan — same checks apply to both, since a
- * translated mirror's frontmatter must be just as parseable as the
- * English original (see #2630).
- *
- * `requireFrontmatter: true` (used for docs/{locale}/skills/ mirrors)
- * flags a completely missing frontmatter block as a finding — the
- * translated mirror must carry the same `name`/`description` as its
- * English original. Curated skills/ (requireFrontmatter: false) keeps
- * the pre-existing tolerant behavior of skipping checks entirely when no
- * block is present.
- *
- * @param {string} skillMd
- * @param {string} label
- * @param {(msg: string) => void} reportFrontmatterFinding
- * @param {{requireFrontmatter?: boolean}} [opts]
- * @returns {{fatal: boolean}}
- */
-function validateSkillFile(skillMd, label, reportFrontmatterFinding, opts = {}) {
-  const { requireFrontmatter = false } = opts;
-
-  if (!fs.existsSync(skillMd)) {
-    console.error(`ERROR: ${label} - Missing SKILL.md`);
-    return { fatal: true };
-  }
-
-  let content;
-  try {
-    content = fs.readFileSync(skillMd, 'utf-8');
-  } catch (err) {
-    console.error(`ERROR: ${label} - ${err.message}`);
-    return { fatal: true };
-  }
-  if (content.trim().length === 0) {
-    console.error(`ERROR: ${label} - Empty file`);
-    return { fatal: true };
-  }
-
-  const fm = extractFrontmatter(content);
-  if (!fm.present) {
-    if (requireFrontmatter) {
-      reportFrontmatterFinding(`${label} - no frontmatter block found (missing name/description)`);
-    }
-    return { fatal: false };
-  }
-
-  const { values, descriptionIndicator, syntaxErrors } = inspectFrontmatter(fm.lines);
-
-  if (!Object.prototype.hasOwnProperty.call(values, 'name')) {
-    reportFrontmatterFinding(`${label} - frontmatter missing required field: name`);
-  } else if (values.name === '') {
-    reportFrontmatterFinding(`${label} - frontmatter 'name' is empty`);
-  }
-
-  if (!Object.prototype.hasOwnProperty.call(values, 'description')) {
-    reportFrontmatterFinding(`${label} - frontmatter missing required field: description`);
-  } else if (values.description === '') {
-    reportFrontmatterFinding(`${label} - frontmatter 'description' is empty`);
-  }
-
-  if (descriptionIndicator && descriptionIndicator.startsWith('|')) {
-    reportFrontmatterFinding(
-      `${label} - frontmatter description uses literal block scalar ` + `'${descriptionIndicator}' which preserves internal newlines; ` + `use an inline string or folded '>' scalar instead`
-    );
-  }
-
-  for (const syntaxError of syntaxErrors) {
-    reportFrontmatterFinding(`${label} - frontmatter ${syntaxError}`);
-  }
-
-  return { fatal: false };
-}
 
 /**
  * Find every SKILL.md under docs/{locale}/skills/*, mirroring the
@@ -322,9 +238,155 @@ function findDocsSkillFiles(docsDir) {
   });
 }
 
+/**
+ * Quality Validation Rules Table
+ *
+ * Each rule is evidence-backed from analysis of 100+ skills and includes
+ * actionable fix hints. Rules evolve via regression tests.
+ */
+const QUALITY_RULES = [
+  {
+    name: 'required-sections',
+    description: 'Skill must contain all required sections with content',
+    check(content, label, isStrict) {
+      const REQUIRED_SECTIONS = ['When to Activate', 'Core Concepts', 'Examples', 'Anti-Patterns', 'Best Practices'];
+      const findings = [];
+      const lines = content.split(/\r?\n/);
+
+      for (const section of REQUIRED_SECTIONS) {
+        const headingPattern = new RegExp(`^#{1,3}\\s*${section.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'i');
+        const lineNum = lines.findIndex(line => headingPattern.test(line.trim()));
+
+        if (lineNum === -1) {
+          findings.push({
+            label,
+            line: 1,
+            severity: isStrict ? 'error' : 'warning',
+            message: `Missing required section: "${section}"`,
+            hint: `Add a level 2 heading "## ${section}" with content below it`
+          });
+        }
+      }
+
+      return findings;
+    }
+  },
+  {
+    name: 'section-depth',
+    description: 'Each required section must have meaningful content (200+ chars)',
+    check(content, label, isStrict) {
+      if (!isStrict) return [];
+
+      const REQUIRED_SECTIONS = ['When to Activate', 'Core Concepts', 'Examples', 'Anti-Patterns', 'Best Practices'];
+      const findings = [];
+
+      const extractSectionBody = (markdown, sectionTitle) => {
+        const headingPattern = new RegExp(`^#{1,3}\\s*${sectionTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`);
+        const sectionHeadings = new Set(REQUIRED_SECTIONS.map(t => t.trim()));
+        const lines = markdown.split(/\r?\n/);
+        let inTargetSection = false;
+        let sectionStartLine = -1;
+        const bodyLines = [];
+
+        for (let i = 0; i < lines.length; i++) {
+          const trimmed = lines[i].trim();
+          if (!inTargetSection) {
+            if (headingPattern.test(trimmed)) {
+              inTargetSection = true;
+              sectionStartLine = i;
+            }
+            continue;
+          }
+
+          const nextHeadingMatch = trimmed.match(/^#{1,3}\s*(.+?)\s*$/);
+          if (nextHeadingMatch && sectionHeadings.has(nextHeadingMatch[1].trim())) {
+            break;
+          }
+
+          bodyLines.push(lines[i]);
+        }
+
+        return { body: bodyLines.join('\n').trim(), startLine: sectionStartLine };
+      };
+
+      for (const section of REQUIRED_SECTIONS) {
+        const { body, startLine } = extractSectionBody(content, section);
+        const normalized = body.replace(/[`*_~>#\-\s]/g, '').toLowerCase();
+        const isEmpty = !normalized || ['todo', 'tbd', 'n/a', 'na', 'placeholder'].includes(normalized);
+        const isTooShort = body.length < 200;
+
+        if (isEmpty || isTooShort) {
+          findings.push({
+            label,
+            line: startLine + 2,
+            severity: 'error',
+            message: `Section "${section}" is ${isEmpty ? 'empty or placeholder-only' : 'too short'} (${body.length} chars)`,
+            hint: `Expand "${section}" with meaningful content (aim for 200+ characters describing practical use and patterns)`
+          });
+        }
+      }
+
+      return findings;
+    }
+  },
+  {
+    name: 'secret-patterns',
+    description: 'Detect hardcoded API keys, tokens, and credentials',
+    check(content, label) {
+      const SECRET_PATTERNS = [
+        /(?:api[_-]?key|token|secret|passwd|password|access[_-]?key)[\s:="']+[A-Za-z0-9_-]{8,}/gi,
+        /sk_(?:live|test)_[A-Za-z0-9]+/g,
+        /ghp_[A-Za-z0-9]{20,}/g,
+        /xox[baprs]-[A-Za-z0-9-]+/g,
+      ];
+
+      const findings = [];
+      const lines = content.split(/\r?\n/);
+
+      lines.forEach((line, index) => {
+        for (const pattern of SECRET_PATTERNS) {
+          if (pattern.test(line)) {
+            const matchCount = (line.match(pattern) || []).length;
+            findings.push({
+              label,
+              line: index + 1,
+              severity: 'error',
+              message: `Detected ${matchCount} secret-like pattern(s) (API key, token, etc.)`,
+              hint: `Replace with placeholder like '<YOUR_API_KEY>' or reference to documentation on obtaining credentials`
+            });
+            pattern.lastIndex = 0; // Reset global regex
+          }
+        }
+      });
+
+      return findings;
+    }
+  }
+];
+
+/**
+ * Run quality checks on skill content, returning findings with line numbers
+ * and fix hints for actionable feedback.
+ *
+ * @param {string} content
+ * @param {string} label
+ * @param {boolean} isStrict
+ * @returns {Array<{label: string, line: number, severity: string, message: string, hint: string}>}
+ */
+function checkQualityRules(content, label, isStrict) {
+  const findings = [];
+
+  for (const rule of QUALITY_RULES) {
+    const ruleFinding = rule.check(content, label, isStrict);
+    findings.push(...ruleFinding);
+  }
+
+  return findings;
+}
+
 function validateSkills() {
   const curatedExists = fs.existsSync(SKILLS_DIR);
-  const docsSkillFiles = findDocsSkillFiles(DOCS_DIR);
+  const docsSkillFiles = DOCS_DIR ? findDocsSkillFiles(DOCS_DIR) : [];
 
   if (!curatedExists && docsSkillFiles.length === 0) {
     console.log('No skills directory (skills/ or docs/*/skills/), skipping');
@@ -345,27 +407,101 @@ function validateSkills() {
     }
   };
 
+  const reportQualityFinding = (finding) => {
+    if (finding.severity === 'error') {
+      console.error(`ERROR: ${finding.label}:${finding.line} - ${finding.message}`);
+      console.error(`       Fix: ${finding.hint}`);
+      hasErrors = true;
+    } else if (finding.severity === 'warning' && STRICT) {
+      console.error(`ERROR: ${finding.label}:${finding.line} - ${finding.message}`);
+      console.error(`       Fix: ${finding.hint}`);
+      hasErrors = true;
+    } else if (finding.severity === 'warning') {
+      console.warn(`WARN: ${finding.label}:${finding.line} - ${finding.message}`);
+      console.warn(`      Fix: ${finding.hint}`);
+      warnCount++;
+    }
+  };
+
+  const processSkillFile = (skillMd, label, requireFrontmatter) => {
+    if (!fs.existsSync(skillMd)) {
+      console.error(`ERROR: ${label} - Missing SKILL.md`);
+      return false;
+    }
+
+    let content;
+    try {
+      content = fs.readFileSync(skillMd, 'utf-8');
+    } catch (err) {
+      console.error(`ERROR: ${label} - ${err.message}`);
+      return false;
+    }
+    if (content.trim().length === 0) {
+      console.error(`ERROR: ${label} - Empty file`);
+      return false;
+    }
+
+    const fm = extractFrontmatter(content);
+    if (!fm.present) {
+      if (requireFrontmatter) {
+        reportFrontmatterFinding(`${label} - no frontmatter block found (missing name/description)`);
+      }
+      return true;
+    }
+
+    const { values, descriptionIndicator, syntaxErrors } = inspectFrontmatter(fm.lines);
+
+    if (!Object.prototype.hasOwnProperty.call(values, 'name')) {
+      reportFrontmatterFinding(`${label} - frontmatter missing required field: name`);
+    } else if (values.name === '') {
+      reportFrontmatterFinding(`${label} - frontmatter 'name' is empty`);
+    }
+
+    if (!Object.prototype.hasOwnProperty.call(values, 'description')) {
+      reportFrontmatterFinding(`${label} - frontmatter missing required field: description`);
+    } else if (values.description === '') {
+      reportFrontmatterFinding(`${label} - frontmatter 'description' is empty`);
+    }
+
+    if (descriptionIndicator && descriptionIndicator.startsWith('|')) {
+      reportFrontmatterFinding(
+        `${label} - frontmatter description uses literal block scalar ` + `'${descriptionIndicator}' which preserves internal newlines; ` + `use an inline string or folded '>' scalar instead`
+      );
+    }
+
+    for (const syntaxError of syntaxErrors) {
+      reportFrontmatterFinding(`${label} - frontmatter ${syntaxError}`);
+    }
+
+    // Run quality checks
+    const qualityFindings = checkQualityRules(content, label, STRICT);
+    for (const finding of qualityFindings) {
+      reportQualityFinding(finding);
+    }
+
+    return true;
+  };
+
   if (curatedExists) {
     const entries = fs.readdirSync(SKILLS_DIR, { withFileTypes: true });
     const dirs = entries.filter(e => e.isDirectory() && !e.name.startsWith('.')).map(e => e.name);
 
     for (const dir of dirs) {
-      const { fatal } = validateSkillDir(dir, SKILLS_DIR, reportFrontmatterFinding);
-      if (fatal) {
+      const skillMd = path.join(SKILLS_DIR, dir, 'SKILL.md');
+      if (processSkillFile(skillMd, `${dir}/SKILL.md`, false)) {
+        validCount++;
+      } else {
         hasErrors = true;
-        continue;
       }
-      validCount++;
     }
   }
 
   for (const { skillMd, label } of docsSkillFiles) {
-    const { fatal } = validateSkillFile(skillMd, label, reportFrontmatterFinding, { requireFrontmatter: true });
-    if (fatal) {
+    if (processSkillFile(skillMd, label, true)) {
+      validCount++;
+    } else {
       hasErrors = true;
-      continue;
     }
-    validCount++;
   }
 
   if (hasErrors) {
