@@ -13,9 +13,26 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const SCRIPT_PATH = path.join(__dirname, '..', '..', 'scripts', 'ci', 'validate-skills.js');
+const QUALITY_SCRIPT_PATH = path.join(__dirname, '..', '..', 'scripts', 'ci', 'validate-skill-quality.js');
 
 function runValidator(skillsDir, extraArgs = []) {
   const result = spawnSync('node', [SCRIPT_PATH, skillsDir, ...extraArgs], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      CI_STRICT_SKILLS: '1', // Enable strict mode for quality checks
+    },
+  });
+
+  return {
+    status: result.status ?? 1,
+    stdout: result.stdout || '',
+    stderr: result.stderr || '',
+  };
+}
+
+function runStandaloneValidator(skillPath, extraArgs = []) {
+  const result = spawnSync('node', [QUALITY_SCRIPT_PATH, skillPath, ...extraArgs], {
     encoding: 'utf8',
     env: {
       ...process.env,
@@ -355,6 +372,50 @@ Do not allow later section content to leak into earlier sections due to improper
       assert.match(output, /empty|placeholder-only/i, 'Should report empty sections');
       assert.match(output, /Core Concepts/i, 'Should specifically mention Core Concepts as empty');
       assert.match(output, /Fix:/i, 'Should provide fix hint');
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  check('standalone validator detects empty Core Concepts with boundary misattribution (untrusted CLI path)', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-skill-standalone-'));
+    try {
+      const skillDir = path.join(tempDir, 'test-skill');
+      fs.mkdirSync(skillDir, { recursive: true });
+      const skillFile = path.join(skillDir, 'SKILL.md');
+      fs.writeFileSync(
+        skillFile,
+        `---
+name: test-skill
+description: Test for standalone validator CLI path to ensure extractSectionBody state machine is robust against untrusted file inputs.
+---
+# Standalone Boundary Test
+
+## When to Activate
+This test validates that the standalone validate-skill-quality.js module properly enforces section boundaries when processing untrusted file inputs. This is critical for the CLI path which accepts arbitrary file paths and must not be vulnerable to crafted markdown that exploits state machine bugs. Repository requirement: all untrusted input paths (CLI args, file paths, subprocess arguments) must have regression coverage.
+
+## Core Concepts
+
+
+## Examples
+Content in Examples section should NOT be collected into the empty Core Concepts section above. If the section boundary state machine fails, this content will leak and cause false negatives in strict mode validation. This is a security-relevant bug that must be caught by regression tests for the untrusted CLI path.
+
+## Anti-Patterns
+- Closure variables that persist state across iterations in reduce functions
+- Section boundary detection that fails when sections are empty
+- Missing regression tests for the untrusted CLI input handling path
+
+## Best Practices
+- Use immutable accumulator objects with explicit boundary flags
+- Test section extraction with empty sections followed by non-empty sections
+- Ensure CLI path regression coverage for all untrusted input handling
+`
+      );
+      const result = runStandaloneValidator(skillFile, ['--strict']);
+      assert.notStrictEqual(result.status, 0, 'Expected standalone validator to reject skill with empty Core Concepts in strict mode');
+      const output = result.stderr || result.stdout;
+      assert.match(output, /empty|placeholder-only/i, 'Standalone validator should detect empty sections');
+      assert.match(output, /Core Concepts/i, 'Should specifically identify Core Concepts as empty');
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
