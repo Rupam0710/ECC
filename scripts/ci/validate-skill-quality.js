@@ -72,26 +72,30 @@ function extractSectionBody(markdown, sectionTitle) {
   const headingPattern = new RegExp(`^#{1,3}\\s*${sectionTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`);
   const sectionHeadings = new Set(REQUIRED_SECTIONS.map((title) => title.trim()));
   const lines = markdown.split(/\r?\n/);
-  let inTargetSection = false;
 
-  const bodyLines = lines.reduce((acc, line) => {
+  const result = lines.reduce((acc, line) => {
+    // Once we've passed the target section, stop collecting
+    if (acc.pastTargetSection) {
+      return acc;
+    }
+
     const trimmed = line.trim();
-    if (!inTargetSection) {
+    if (!acc.inTargetSection) {
       if (headingPattern.test(trimmed)) {
-        inTargetSection = true;
+        return { ...acc, inTargetSection: true };
       }
       return acc;
     }
 
     const nextHeadingMatch = trimmed.match(/^#{1,3}\s*(.+?)\s*$/);
     if (nextHeadingMatch && sectionHeadings.has(nextHeadingMatch[1].trim())) {
-      return acc; // Stop accumulating
+      return { ...acc, pastTargetSection: true }; // Mark boundary, stop collecting
     }
 
-    return [...acc, line];
-  }, []);
+    return { ...acc, bodyLines: [...acc.bodyLines, line] };
+  }, { inTargetSection: false, pastTargetSection: false, bodyLines: [] });
 
-  return bodyLines.join('\n').trim();
+  return result.bodyLines.join('\n').trim();
 }
 
 function findMissingSections(markdown) {

@@ -319,6 +319,47 @@ Avoid vague instructions without clear examples that developers can follow immed
     }
   });
 
+  check('detects empty sections followed by non-empty sections in strict mode', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-skill-boundary-'));
+    try {
+      createTestSkill(
+        path.join(tempDir, 'skills', 'boundary-test'),
+        'SKILL.md',
+        `---
+name: boundary-test
+description: Tests section boundary handling when sections have varying content levels and proper state management.
+---
+# Boundary Test
+
+## When to Activate
+Use this skill when testing validator boundary detection and section state management across multiple sections. This skill ensures the validator properly stops collecting content when encountering the next section heading, preventing content from later sections being incorrectly attributed to empty earlier sections. Critical for validating untrusted CLI inputs and file processing paths.
+
+## Core Concepts
+
+
+## Examples
+This section intentionally has content to test that it is not incorrectly attributed to the empty Core Concepts section above. The validator must properly detect section boundaries and reset state when moving to the next section. This is a critical security requirement for validating file paths and CLI inputs without path traversal or content misattribution issues.
+
+## Anti-Patterns
+Do not allow later section content to leak into earlier sections due to improper boundary handling or state management failures. Never skip validation when processing untrusted file inputs or CLI paths, even if they appear to be from trusted sources.
+
+## Best Practices
+- Properly manage section state in reduce functions to prevent closure variable persistence across iterations
+- Always test boundary conditions when processing structured document formats with section headers
+- Verify that section collection stops at proper boundaries and does not continue into subsequent sections
+`
+      );
+      const result = runValidator(path.join(tempDir, 'skills'), ['--strict']);
+      assert.notStrictEqual(result.status, 0, 'Expected strict mode to fail when Core Concepts section is empty');
+      const output = result.stderr || result.stdout;
+      assert.match(output, /empty|placeholder-only/i, 'Should report empty sections');
+      assert.match(output, /Core Concepts/i, 'Should specifically mention Core Concepts as empty');
+      assert.match(output, /Fix:/i, 'Should provide fix hint');
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   console.log(`\nPassed: ${passed}`);
   console.log(`Failed: ${failed}`);
   process.exit(failed > 0 ? 1 : 0);
