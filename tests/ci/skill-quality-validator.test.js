@@ -121,36 +121,40 @@ Example only.
   check('detects hardcoded secrets and provides fix hints', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-skill-test-'));
     try {
+      const skillContent = '---\n' +
+        'name: secret-skill\n' +
+        'description: Demo skill for testing secret detection.\n' +
+        '---\n' +
+        '# Secret Skill\n' +
+        '\n' +
+        '## When to Activate\n' +
+        'Use this skill when you need to demonstrate proper secret handling patterns. This skill tests that the validator correctly identifies leaked credentials in documentation without false positives from code block examples.\n' +
+        '\n' +
+        '## Core Concepts\n' +
+        'Understanding secret detection patterns is critical for security. This skill demonstrates how to properly handle credentials using environment variables, configuration management, and secure storage patterns rather than embedding sensitive data in code.\n' +
+        '\n' +
+        '## Examples\n' +
+        'Documentation showing proper patterns with code blocks should not trigger false positives:\n' +
+        '```bash\n' +
+        '# Example: Use environment variables safely\n' +
+        'export CREDS=secret\n' +
+        '```\n' +
+        'But avoid patterns like this outside of code blocks: api_key="testkey123456789testkey123456789"\n' +
+        '\n' +
+        '## Anti-Patterns\n' +
+        'Avoid storing credentials directly in source code or configuration files. Never hardcode tokens like password="secretpass123456789secretpass1234". Always use placeholders.\n' +
+        '\n' +
+        '## Best Practices\n' +
+        'Use environment variables for all secrets. Implement secure secret management using HashiCorp Vault or AWS Secrets Manager. Never print sensitive values in logs.';
+      
       createTestSkill(
         path.join(tempDir, 'skills', 'secret-skill'),
         'SKILL.md',
-        `---
-name: secret-skill
-description: Demo skill.
----
-# Secret Skill
-
-## When to Activate
-Use when you need a secret example.
-
-## Core Concepts
-Check for credentials.
-
-## Examples
-\`\`\`bash
-export API_KEY=sk_live_1234567890abcdef
-\`\`\`
-
-## Anti-Patterns
-Avoid leaked variables.
-
-## Best Practices
-- Use environment variables, not hardcoded secrets.
-`
+        skillContent
       );
       const result = runValidator(path.join(tempDir, 'skills'));
       assert.notStrictEqual(result.status, 0, 'Expected validator to fail for hardcoded secrets');
-      assert.match(result.stderr || result.stdout, /secret-like pattern|API_KEY/i);
+      assert.match(result.stderr || result.stdout, /secret-like pattern|api_key|sk_live|ghp_/i);
       assert.match(result.stderr || result.stdout, /Fix:/i); // Verify fix hint
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });

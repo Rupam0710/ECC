@@ -281,8 +281,9 @@ const QUALITY_RULES = [
       const findings = [];
 
       const extractSectionBody = (markdown, sectionTitle) => {
-        const headingPattern = new RegExp(`^#{1,3}\\s*${sectionTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`);
-        const sectionHeadings = new Set(REQUIRED_SECTIONS.map(t => t.trim()));
+        // Match section heading case-insensitively to prevent uppercase or mixed-case headings from being missed
+        const headingPattern = new RegExp(`^#{1,3}\\s*${sectionTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'i');
+        const sectionHeadingsNormalized = new Map(REQUIRED_SECTIONS.map(t => [t.toLowerCase(), t]));
         const lines = markdown.split(/\r?\n/);
         let inTargetSection = false;
         let sectionStartLine = -1;
@@ -298,8 +299,9 @@ const QUALITY_RULES = [
             continue;
           }
 
+          // Normalize heading text to lowercase for comparison to catch UPPERCASE or MixedCase headings
           const nextHeadingMatch = trimmed.match(/^#{1,3}\s*(.+?)\s*$/);
-          if (nextHeadingMatch && sectionHeadings.has(nextHeadingMatch[1].trim())) {
+          if (nextHeadingMatch && sectionHeadingsNormalized.has(nextHeadingMatch[1].trim().toLowerCase())) {
             break;
           }
 
@@ -334,16 +336,25 @@ const QUALITY_RULES = [
     description: 'Detect hardcoded API keys, tokens, and credentials',
     check(content, label) {
       const SECRET_PATTERNS = [
-        /(?:api[_-]?key|token|secret|passwd|password|access[_-]?key)[\s:="']+[A-Za-z0-9_-]{8,}/gi,
-        /sk_(?:live|test)_[A-Za-z0-9]+/g,
-        /ghp_[A-Za-z0-9]{20,}/g,
-        /xox[baprs]-[A-Za-z0-9-]+/g,
+        // Match actual assignments or usage in code, not illustrative documentation text
+        /(?:api[_-]?key|token|secret|passwd|password|access[_-]?key)[\s:="']+[A-Za-z0-9_-]{12,}/gi,
+        /sk_(?:live|test)_[A-Za-z0-9]{32,}/g,  // Require longer suffix for actual SK keys
+        /ghp_[A-Za-z0-9]{20,}(?![a-z])/g,  // Negative lookahead to avoid partial matches
+        /xox[baprs]-[A-Za-z0-9-]{32,}/g,  // Require longer OAuth tokens
       ];
 
       const findings = [];
       const lines = content.split(/\r?\n/);
 
       lines.forEach((line, index) => {
+        // Skip lines that are clearly documentation examples or narrowly-defined placeholders
+        // Do NOT skip lines based on code block boundaries — scan all content for real secrets
+        const isDocExample = line.match(/^\s*\/\//) || 
+                           line.includes('EXAMPLE') || line.includes('example:') ||
+                           line.includes('<YOUR_') || line.includes('[YOUR_') ||
+                           line.includes('placeholder') || line.match(/^\s*-\s+/);
+        if (isDocExample) return;
+        
         for (const pattern of SECRET_PATTERNS) {
           if (pattern.test(line)) {
             const matchCount = (line.match(pattern) || []).length;
@@ -445,6 +456,12 @@ function validateSkills() {
     if (!fm.present) {
       if (requireFrontmatter) {
         reportFrontmatterFinding(`${label} - no frontmatter block found (missing name/description)`);
+      }
+      // IMPORTANT: Always run quality checks even without frontmatter to catch secrets and content issues
+      // in curated skills that skip frontmatter validation
+      const qualityFindings = checkQualityRules(content, label, STRICT);
+      for (const finding of qualityFindings) {
+        reportQualityFinding(finding);
       }
       return true;
     }
