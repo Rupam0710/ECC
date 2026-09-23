@@ -250,23 +250,23 @@ const QUALITY_RULES = [
     description: 'Skill must contain all required sections with content',
     check(content, label, isStrict) {
       const REQUIRED_SECTIONS = ['When to Activate', 'Core Concepts', 'Examples', 'Anti-Patterns', 'Best Practices'];
-      const findings = [];
       const lines = content.split(/\r?\n/);
 
-      for (const section of REQUIRED_SECTIONS) {
+      const findings = REQUIRED_SECTIONS.reduce((acc, section) => {
         const headingPattern = new RegExp(`^#{1,3}\\s*${section.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'i');
         const lineNum = lines.findIndex(line => headingPattern.test(line.trim()));
 
         if (lineNum === -1) {
-          findings.push({
+          return [...acc, {
             label,
             line: 1,
             severity: isStrict ? 'error' : 'warning',
             message: `Missing required section: "${section}"`,
             hint: `Add a level 2 heading "## ${section}" with content below it`
-          });
+          }];
         }
-      }
+        return acc;
+      }, []);
 
       return findings;
     }
@@ -278,7 +278,6 @@ const QUALITY_RULES = [
       if (!isStrict) return [];
 
       const REQUIRED_SECTIONS = ['When to Activate', 'Core Concepts', 'Examples', 'Anti-Patterns', 'Best Practices'];
-      const findings = [];
 
       const extractSectionBody = (markdown, sectionTitle) => {
         // Match section heading case-insensitively to prevent uppercase or mixed-case headings from being missed
@@ -287,7 +286,7 @@ const QUALITY_RULES = [
         const lines = markdown.split(/\r?\n/);
         let inTargetSection = false;
         let sectionStartLine = -1;
-        const bodyLines = [];
+        let bodyLines = [];
 
         for (let i = 0; i < lines.length; i++) {
           const trimmed = lines[i].trim();
@@ -305,28 +304,29 @@ const QUALITY_RULES = [
             break;
           }
 
-          bodyLines.push(lines[i]);
+          bodyLines = [...bodyLines, lines[i]];
         }
 
         return { body: bodyLines.join('\n').trim(), startLine: sectionStartLine };
       };
 
-      for (const section of REQUIRED_SECTIONS) {
+      const findings = REQUIRED_SECTIONS.reduce((acc, section) => {
         const { body, startLine } = extractSectionBody(content, section);
         const normalized = body.replace(/[`*_~>#\-\s]/g, '').toLowerCase();
         const isEmpty = !normalized || ['todo', 'tbd', 'n/a', 'na', 'placeholder'].includes(normalized);
         const isTooShort = body.length < 200;
 
         if (isEmpty || isTooShort) {
-          findings.push({
+          return [...acc, {
             label,
             line: startLine + 2,
             severity: 'error',
             message: `Section "${section}" is ${isEmpty ? 'empty or placeholder-only' : 'too short'} (${body.length} chars)`,
             hint: `Expand "${section}" with meaningful content (aim for 200+ characters describing practical use and patterns)`
-          });
+          }];
         }
-      }
+        return acc;
+      }, []);
 
       return findings;
     }
@@ -336,39 +336,42 @@ const QUALITY_RULES = [
     description: 'Detect hardcoded API keys, tokens, and credentials',
     check(content, label) {
       const SECRET_PATTERNS = [
-        // Match actual assignments or usage in code, not illustrative documentation text
-        /(?:api[_-]?key|token|secret|passwd|password|access[_-]?key)[\s:="']+[A-Za-z0-9_-]{12,}/gi,
+        // Only match hardcoded credential values in quotes, not variable assignments or function calls
+        // Matches: api_key = "sk_live_..." or password = "secretpass123..." (with quotes)
+        // Rejects: token = generateTestJWT(...), api_key = PropertyMock(...), password = hashedPassword
+        /(?:api[_-]?key|token|secret|passwd|password|access[_-]?key)\s*[:=]\s*["']([A-Za-z0-9_\-:/.]{20,})["']/gi,
         /sk_(?:live|test)_[A-Za-z0-9]{32,}/g,  // Require longer suffix for actual SK keys
         /ghp_[A-Za-z0-9]{20,}(?![a-z])/g,  // Negative lookahead to avoid partial matches
         /xox[baprs]-[A-Za-z0-9-]{32,}/g,  // Require longer OAuth tokens
       ];
 
-      const findings = [];
       const lines = content.split(/\r?\n/);
 
-      lines.forEach((line, index) => {
+      const findings = lines.reduce((acc, line, index) => {
         // Skip lines that are clearly documentation examples or narrowly-defined placeholders
         // Do NOT skip lines based on code block boundaries — scan all content for real secrets
         const isDocExample = line.match(/^\s*\/\//) || 
                            line.includes('EXAMPLE') || line.includes('example:') ||
                            line.includes('<YOUR_') || line.includes('[YOUR_') ||
                            line.includes('placeholder') || line.match(/^\s*-\s+/);
-        if (isDocExample) return;
+        if (isDocExample) return acc;
         
+        let updatedAcc = acc;
         for (const pattern of SECRET_PATTERNS) {
           if (pattern.test(line)) {
             const matchCount = (line.match(pattern) || []).length;
-            findings.push({
+            updatedAcc = [...updatedAcc, {
               label,
               line: index + 1,
               severity: 'error',
               message: `Detected ${matchCount} secret-like pattern(s) (API key, token, etc.)`,
               hint: `Replace with placeholder like '<YOUR_API_KEY>' or reference to documentation on obtaining credentials`
-            });
+            }];
             pattern.lastIndex = 0; // Reset global regex
           }
         }
-      });
+        return updatedAcc;
+      }, []);
 
       return findings;
     }
@@ -385,12 +388,10 @@ const QUALITY_RULES = [
  * @returns {Array<{label: string, line: number, severity: string, message: string, hint: string}>}
  */
 function checkQualityRules(content, label, isStrict) {
-  const findings = [];
-
-  for (const rule of QUALITY_RULES) {
+  const findings = QUALITY_RULES.reduce((acc, rule) => {
     const ruleFinding = rule.check(content, label, isStrict);
-    findings.push(...ruleFinding);
-  }
+    return [...acc, ...ruleFinding];
+  }, []);
 
   return findings;
 }
