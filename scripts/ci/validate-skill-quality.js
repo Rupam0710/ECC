@@ -73,63 +73,59 @@ function extractSectionBody(markdown, sectionTitle) {
   const sectionHeadings = new Set(REQUIRED_SECTIONS.map((title) => title.trim()));
   const lines = markdown.split(/\r?\n/);
   let inTargetSection = false;
-  const bodyLines = [];
 
-  for (const line of lines) {
+  const bodyLines = lines.reduce((acc, line) => {
     const trimmed = line.trim();
     if (!inTargetSection) {
       if (headingPattern.test(trimmed)) {
         inTargetSection = true;
       }
-      continue;
+      return acc;
     }
 
     const nextHeadingMatch = trimmed.match(/^#{1,3}\s*(.+?)\s*$/);
     if (nextHeadingMatch && sectionHeadings.has(nextHeadingMatch[1].trim())) {
-      break;
+      return acc; // Stop accumulating
     }
 
-    bodyLines.push(line);
-  }
+    return [...acc, line];
+  }, []);
 
   return bodyLines.join('\n').trim();
 }
 
 function findMissingSections(markdown) {
-  const missing = [];
-  for (const section of REQUIRED_SECTIONS) {
+  return REQUIRED_SECTIONS.reduce((missing, section) => {
     const heading = new RegExp(`^##?\\s*${section.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'm');
     if (!heading.test(markdown)) {
-      missing.push(section);
+      return [...missing, section];
     }
-  }
-  return missing;
+    return missing;
+  }, []);
 }
 
 function findEmptySections(markdown) {
-  const empty = [];
-  for (const section of REQUIRED_SECTIONS) {
+  return REQUIRED_SECTIONS.reduce((empty, section) => {
     const body = extractSectionBody(markdown, section);
     const normalized = body.replace(/[`*_~>#\-\s]/g, '').toLowerCase();
     if (!normalized || ['todo', 'tbd', 'n/a', 'na', 'placeholder'].includes(normalized)) {
       const heading = new RegExp(`^##?\\s*${section.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'm');
       if (heading.test(markdown)) {
-        empty.push(section);
+        return [...empty, section];
       }
     }
-  }
-  return empty;
+    return empty;
+  }, []);
 }
 
 function scanSecrets(markdown) {
-  const matches = [];
-  for (const pattern of SECRET_PATTERNS) {
+  return SECRET_PATTERNS.reduce((matches, pattern) => {
     const result = markdown.match(pattern);
     if (result) {
-      matches.push(result[0]);
+      return [...matches, result[0]];
     }
-  }
-  return matches;
+    return matches;
+  }, []);
 }
 
 function getSkillFiles(targetPath) {

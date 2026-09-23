@@ -339,7 +339,9 @@ const QUALITY_RULES = [
         // Only match hardcoded credential values in quotes, not variable assignments or function calls
         // Matches: api_key = "sk_live_..." or password = "secretpass123..." (with quotes)
         // Rejects: token = generateTestJWT(...), api_key = PropertyMock(...), password = hashedPassword
-        /(?:api[_-]?key|token|secret|passwd|password|access[_-]?key)\s*[:=]\s*["']([A-Za-z0-9_\-:/.]{20,})["']/gi,
+        // Minimum 8 characters for quoted assignments to catch realistic short credentials like "Passw0rd1234!"
+        // Character class includes alphanumeric, underscore, special chars: - : / . ! @ # $ % ^ & * ( ) = + [ ] { } | ; ' < > ? , ~
+        /(?:api[_-]?key|token|secret|passwd|password|access[_-]?key)\s*[:=]\s*["']([A-Za-z0-9_\-:/.!@#$%^&*()=+[\]{}|;'<>?,~]{8,})["']/gi,
         /sk_(?:live|test)_[A-Za-z0-9]{32,}/g,  // Require longer suffix for actual SK keys
         /ghp_[A-Za-z0-9]{20,}(?![a-z])/g,  // Negative lookahead to avoid partial matches
         /xox[baprs]-[A-Za-z0-9-]{32,}/g,  // Require longer OAuth tokens
