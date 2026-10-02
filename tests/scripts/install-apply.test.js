@@ -1056,6 +1056,74 @@ function runTests() {
     }
   })) passed++; else failed++;
 
+  if (test('isolates project hooks from ESM package scopes without overwriting user Claude package data', () => {
+    const homeDir = createTempDir('install-apply-claude-project-esm-home-');
+    const projectDir = createTempDir('install-apply-claude-project-esm-');
+    const claudeRoot = path.join(projectDir, '.claude');
+    const userPackagePath = path.join(claudeRoot, 'package.json');
+    const scriptsPackagePath = path.join(claudeRoot, 'scripts', 'package.json');
+    const hooksPackagePath = path.join(claudeRoot, 'scripts', 'hooks', 'package.json');
+    const libPackagePath = path.join(claudeRoot, 'scripts', 'lib', 'package.json');
+    const userPackage = '{"name":"user-claude-config","type":"module"}\n';
+    const userScriptsPackage = '{"name":"user-claude-scripts","type":"module"}\n';
+
+    try {
+      fs.writeFileSync(path.join(projectDir, 'package.json'), '{"type":"module"}\n');
+      fs.mkdirSync(path.dirname(scriptsPackagePath), { recursive: true });
+      fs.writeFileSync(userPackagePath, userPackage);
+      fs.writeFileSync(scriptsPackagePath, userScriptsPackage);
+
+      const firstInstall = run(
+        ['--target', 'claude-project', '--profile', 'core', '--enable-hooks'],
+        { cwd: projectDir, homeDir }
+      );
+      assert.strictEqual(firstInstall.code, 0, firstInstall.stderr);
+      assert.strictEqual(fs.readFileSync(userPackagePath, 'utf8'), userPackage);
+      assert.strictEqual(fs.readFileSync(scriptsPackagePath, 'utf8'), userScriptsPackage);
+      assert.deepStrictEqual(readJson(hooksPackagePath), { type: 'commonjs' });
+      assert.deepStrictEqual(readJson(libPackagePath), { type: 'commonjs' });
+
+      const hookResult = spawnSync(
+        process.execPath,
+        [path.join(claudeRoot, 'scripts', 'hooks', 'block-no-verify.js')],
+        {
+          input: JSON.stringify({ tool_input: { command: 'git commit --no-verify' } }),
+          encoding: 'utf8',
+          cwd: projectDir,
+        }
+      );
+      assert.strictEqual(hookResult.status, 2, hookResult.stderr);
+      assert.match(hookResult.stderr, /no-verify/i);
+
+      const secondInstall = run(
+        ['--target', 'claude-project', '--profile', 'core', '--enable-hooks'],
+        { cwd: projectDir, homeDir }
+      );
+      assert.strictEqual(secondInstall.code, 0, secondInstall.stderr);
+      assert.strictEqual(fs.readFileSync(userPackagePath, 'utf8'), userPackage);
+      assert.strictEqual(fs.readFileSync(scriptsPackagePath, 'utf8'), userScriptsPackage);
+
+      const state = readJson(path.join(claudeRoot, 'ecc', 'install-state.json'));
+      const boundaryPaths = [hooksPackagePath, libPackagePath].map(file => fs.realpathSync(file));
+      const packageBoundaryOperations = state.operations.filter(operation => (
+        boundaryPaths.includes(operation.destinationPath)
+      ));
+      assert.deepStrictEqual(
+        packageBoundaryOperations.map(operation => operation.destinationPath).sort(),
+        [...boundaryPaths].sort()
+      );
+      assert.ok(packageBoundaryOperations.every(operation => operation.moduleId === 'hooks-runtime'));
+      assert.ok(packageBoundaryOperations.every(operation => (
+        /^[a-f0-9]{64}$/i.test(operation.contentSha256)
+      )));
+      assert.ok(!state.operations.some(operation => operation.destinationPath === userPackagePath));
+      assert.ok(!state.operations.some(operation => operation.destinationPath === scriptsPackagePath));
+    } finally {
+      cleanup(homeDir);
+      cleanup(projectDir);
+    }
+  })) passed++; else failed++;
+
   if (test('preserves existing settings.json while disabling Claude co-author attribution', () => {
     const homeDir = createTempDir('install-apply-home-');
     const projectDir = createTempDir('install-apply-project-');
@@ -1123,6 +1191,7 @@ function runTests() {
 
       applyInstallPlan({
         targetRoot: path.join(tempDir, 'installed'),
+        adapter: { id: 'test-install', target: 'test-install' },
         installStatePath,
         statePreview: {
           schemaVersion: 'ecc.install.v1',
@@ -1418,6 +1487,29 @@ function runTests() {
       cleanup(projectDir);
     }
   })) passed++; else failed++;
+
+  for (const explicitConfig of [true, false]) {
+    if (test(`installs from a UTF-8 BOM config (${explicitConfig ? '--config' : 'auto-detected'})`, () => {
+      const homeDir = createTempDir('install-apply-bom-home-');
+      const projectDir = createTempDir('install-apply-bom-project-');
+      const configPath = path.join(projectDir, 'ecc-install.json');
+      const content = '\uFEFF{\r\n  "version": 1,\r\n  "target": "cursor",\r\n  "modules": ["rules-core"]\r\n}\r\n';
+
+      try {
+        fs.writeFileSync(configPath, content, 'utf8');
+        const args = explicitConfig ? ['--config', configPath] : [];
+        const result = run(args, { cwd: projectDir, homeDir });
+        assert.strictEqual(result.code, 0, result.stderr);
+        assert.ok(fs.existsSync(path.join(projectDir, '.cursor', 'rules', 'common-coding-style.mdc')));
+        const state = readJson(path.join(projectDir, '.cursor', 'ecc-install-state.json'));
+        assert.deepStrictEqual(state.request.modules, ['rules-core']);
+        assert.strictEqual(fs.readFileSync(configPath, 'utf8'), content);
+      } finally {
+        cleanup(homeDir);
+        cleanup(projectDir);
+      }
+    })) passed++; else failed++;
+  }
 
   if (test('preserves legacy language installs when a project config is present', () => {
     const homeDir = createTempDir('install-apply-home-');

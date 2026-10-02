@@ -10,7 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const yaml = require('js-yaml');
-const { checkQualityRules } = require('./validate-skills');
+const { checkQualityRules } = require('./skill-quality-rules');
 
 const STRICT = process.argv.includes('--strict') || process.env.CI_STRICT_SKILLS === '1';
 

@@ -11,9 +11,10 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { checkQualityRules } = require('../../scripts/ci/skill-quality-rules');
 
-const SCRIPT_PATH = path.join(__dirname, '..', '..', 'scripts', 'ci', 'validate-skills.js');
 const QUALITY_SCRIPT_PATH = path.join(__dirname, '..', '..', 'scripts', 'ci', 'validate-skill-quality.js');
+const SCRIPT_PATH = QUALITY_SCRIPT_PATH;
 
 function runValidator(skillsDir, extraArgs = [], strict = true) {
   const result = spawnSync('node', [SCRIPT_PATH, skillsDir, ...extraArgs], {
@@ -26,8 +27,8 @@ function runValidator(skillsDir, extraArgs = [], strict = true) {
 
   return {
     status: result.status ?? 1,
-    stdout: result.stdout || '',
-    stderr: result.stderr || '',
+    stdout: `${result.stdout || ''}\n${result.stderr || ''}`,
+    stderr: '',
   };
 }
 
@@ -42,8 +43,8 @@ function runStandaloneValidator(skillPath, extraArgs = [], strict = true) {
 
   return {
     status: result.status ?? 1,
-    stdout: result.stdout || '',
-    stderr: result.stderr || '',
+    stdout: `${result.stdout || ''}\n${result.stderr || ''}`,
+    stderr: '',
   };
 }
 
@@ -421,7 +422,7 @@ Content in Examples section should NOT be collected into the empty Core Concepts
     }
   });
 
-  check('standalone and in-tree validators agree on quality-rule verdicts', () => {
+  check('standalone validator follows the shared quality-rule verdicts', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-skill-contract-'));
     try {
       const skillDir = path.join(tempDir, 'skills', 'contract-skill');
@@ -446,20 +447,145 @@ Content in Examples section should NOT be collected into the empty Core Concepts
           '',
         ].join('\n');
         createTestSkill(skillDir, 'SKILL.md', content);
+        return content;
       };
 
       const assertBothVerdicts = (sections, strict, expectedStatus, label) => {
-        createSkill(sections);
-        const inTree = runValidator(path.join(tempDir, 'skills'), [], strict);
+        const content = createSkill(sections);
+        const findings = checkQualityRules(content, 'contract-skill/SKILL.md', strict);
         const standalone = runStandaloneValidator(skillFile, [], strict);
-        assert.strictEqual(inTree.status, expectedStatus, `${label}: in-tree validator verdict`);
+        const ruleStatus = findings.some((finding) => finding.severity === 'error' || (strict && finding.severity === 'warning')) ? 1 : 0;
+        assert.strictEqual(ruleStatus, expectedStatus, `${label}: shared rules verdict`);
         assert.strictEqual(standalone.status, expectedStatus, `${label}: standalone validator verdict`);
       };
 
       const withoutActivation = requiredSections.filter((section) => section !== 'When to Activate');
-      assertBothVerdicts(withoutActivation, false, 0, 'missing section in default mode');
+      assertBothVerdicts(withoutActivation, false, 1, 'missing section in default mode');
       assertBothVerdicts(withoutActivation, true, 1, 'missing section in strict mode');
       assertBothVerdicts(requiredSections.map((section) => section.toUpperCase()), true, 0, 'uppercase headings in strict mode');
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  check('rejects missing required sections without strict mode', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-skill-missing-default-'));
+    try {
+      createTestSkill(
+        path.join(tempDir, 'skills', 'missing-section'),
+        'SKILL.md',
+        `---
+name: missing-section
+description: Valid metadata for the missing-section quality regression fixture.
+---
+# Missing Section
+
+## Core Concepts
+${'Concrete core guidance for this regression fixture. '.repeat(5)}
+
+## Examples
+${'Practical examples that show the expected workflow and outcomes. '.repeat(5)}
+
+## Anti-Patterns
+${'Avoid unsafe shortcuts and document the reason for each restriction. '.repeat(5)}
+
+## Best Practices
+${'Use repeatable checks and describe the expected successful result. '.repeat(5)}
+`
+      );
+      const result = runValidator(path.join(tempDir, 'skills'), [], false);
+      assert.notStrictEqual(result.status, 0, 'Expected missing required section to fail in default mode');
+      assert.match(result.stderr || result.stdout, /Missing required section: "When to Activate"/i);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  check('detects unquoted hardcoded credential assignments', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-skill-unquoted-secret-'));
+    try {
+      const skillDir = path.join(tempDir, 'skills', 'unquoted-secret');
+      createTestSkill(
+        skillDir,
+        'SKILL.md',
+        `---
+name: unquoted-secret
+description: Valid metadata for the unquoted credential regression fixture.
+---
+# Unquoted Secret
+
+## When to Activate
+${'Use this skill to validate concrete guidance for a real implementation. '.repeat(4)}
+
+## Core Concepts
+${'Explain the relevant concepts with enough useful context for the reader. '.repeat(4)}
+
+## Examples
+${'Show a practical example and describe how to verify its result. '.repeat(4)}
+
+## Anti-Patterns
+${'Describe unsafe patterns and provide a safer alternative. '.repeat(4)}
+
+## Best Practices
+${'Use checks that are repeatable, specific, and easy to review. '.repeat(4)}
+
+password=Passw0rd1234
+`
+      );
+      const result = runStandaloneValidator(path.join(skillDir, 'SKILL.md'), [], false);
+      assert.notStrictEqual(result.status, 0, 'Expected unquoted credential assignment to fail');
+      assert.match(result.stderr || result.stdout, /secret-like pattern/i);
+      assert.doesNotMatch(result.stderr || result.stdout, /Passw0rd1234/);
+
+      const nonLiteralCredentials = fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8')
+        .replace('password=Passw0rd1234', [
+          'password=hashedPassword',
+          'token=generateTestJWT(userId)',
+          'api_key=PropertyMock(...)',
+        ].join('\n'));
+      fs.writeFileSync(path.join(skillDir, 'SKILL.md'), nonLiteralCredentials, 'utf8');
+      const nonLiteralResult = runStandaloneValidator(path.join(skillDir, 'SKILL.md'), [], false);
+      assert.strictEqual(nonLiteralResult.status, 0, 'Expected non-literal credential expressions to pass');
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  check('detects credential assignments on bullet lines', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-skill-bulleted-secret-'));
+    try {
+      const skillDir = path.join(tempDir, 'skills', 'bulleted-secret');
+      createTestSkill(
+        skillDir,
+        'SKILL.md',
+        `---
+name: bulleted-secret
+description: Valid metadata for the bullet-prefixed credential regression fixture.
+---
+# Bulleted Secret
+
+## When to Activate
+${'Use this skill to validate concrete guidance for a real implementation. '.repeat(4)}
+
+## Core Concepts
+${'Explain the relevant concepts with enough useful context for the reader. '.repeat(4)}
+
+## Examples
+${'Show a practical example and describe how to verify its result. '.repeat(4)}
+
+## Anti-Patterns
+${'Describe unsafe patterns and provide a safer alternative. '.repeat(4)}
+
+## Best Practices
+${'Use checks that are repeatable, specific, and easy to review. '.repeat(4)}
+
+- api_key="actualcredentialvalue12345"
+`
+      );
+      const result = runStandaloneValidator(path.join(skillDir, 'SKILL.md'), [], false);
+      assert.notStrictEqual(result.status, 0, 'Expected bullet-prefixed credential assignment to fail');
+      assert.match(result.stderr || result.stdout, /secret-like pattern/i);
+      assert.doesNotMatch(result.stderr || result.stdout, /actualcredentialvalue12345/);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

@@ -169,6 +169,7 @@ function runHermeticPrePush({
   includeCorepack = true,
   includePnpm = false,
   audit = false,
+  runChecks = true,
 } = {}) {
   const tempDir = createTempDir('codex-pre-push-');
   const binDir = path.join(tempDir, 'bin');
@@ -204,6 +205,7 @@ ${includePnpm ? functionStub('pnpm', false) : ''}
       PATH: toBashPath(binDir),
       BASH_ENV: toBashPath(bashEnv),
       ECC_PREPUSH_AUDIT: audit ? '1' : '0',
+      ECC_PREPUSH_RUN_CHECKS: runChecks ? '1' : '0',
       ECC_SKIP_GIT_HOOKS: '0',
       ECC_SKIP_PREPUSH: '0',
       MSYS_NO_PATHCONV: '1',
@@ -221,7 +223,7 @@ ${includePnpm ? functionStub('pnpm', false) : ''}
 
 if (
   test('pre-push uses Corepack pinned pnpm and runs every required verification script', () => {
-    const { result, calls } = runHermeticPrePush();
+    const { result, calls } = runHermeticPrePush({ runChecks: true });
     assert.strictEqual(result.status, 0, JSON.stringify(result, null, 2));
     assert.deepStrictEqual(calls, [
       'pnpm run lint',
@@ -264,7 +266,7 @@ else failed++;
 
 if (
   test('pre-push stops immediately when a required verification script fails', () => {
-    const { result, calls } = runHermeticPrePush({ failScript: 'typecheck' });
+    const { result, calls } = runHermeticPrePush({ runChecks: true, failScript: 'typecheck' });
     assert.notStrictEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
     assert.deepStrictEqual(calls, ['pnpm run lint', 'pnpm run typecheck']);
     assert.match(result.stderr, /typecheck failed/);
@@ -274,8 +276,19 @@ if (
 else failed++;
 
 if (
+  test('pre-push skips verification scripts by default when opt-in is not set', () => {
+    const { result, calls } = runHermeticPrePush({ runChecks: false });
+    assert.strictEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.deepStrictEqual(calls, []);
+    assert.match(result.stderr, /ECC_PREPUSH_RUN_CHECKS!=1/);
+  })
+)
+  passed++;
+else failed++;
+
+if (
   test('pre-push runs the production audit through Corepack pnpm', () => {
-    const { result, calls } = runHermeticPrePush({ audit: true });
+    const { result, calls } = runHermeticPrePush({ runChecks: true, audit: true });
     assert.strictEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
     assert.deepStrictEqual(calls, [
       'pnpm run lint',
@@ -391,6 +404,7 @@ function runHermeticPythonPrePush({
       ? process.env.PATH
       : `${toBashPath(pathBin)}${path.delimiter}${process.env.PATH}`,
     HOME: process.env.HOME ?? '',
+    ECC_PREPUSH_RUN_CHECKS: '1',
     ECC_SKIP_GIT_HOOKS: '0',
     ECC_SKIP_PREPUSH: '0',
     MSYS_NO_PATHCONV: '1',
@@ -903,7 +917,13 @@ if (
       const merged = fs.readFileSync(configPath, 'utf8');
       const parsed = TOML.parse(merged);
       assert.strictEqual(parsed.mcp_servers['chrome-devtools'].command, 'npx');
-      assert.deepStrictEqual(parsed.mcp_servers['chrome-devtools'].args, ['chrome-devtools-mcp@latest']);
+      assert.deepStrictEqual(parsed.mcp_servers['chrome-devtools'].args, ['chrome-devtools-mcp@1.10.1']);
+      const rootMcp = JSON.parse(fs.readFileSync(path.join(repoRoot, '.mcp.json'), 'utf8'));
+      const rootPackages = rootMcp.mcpServers['chrome-devtools'].args.filter(arg =>
+        arg.startsWith('chrome-devtools-mcp@'));
+      assert.deepStrictEqual(rootPackages, parsed.mcp_servers['chrome-devtools'].args,
+        'root MCP and generated Codex TOML must use the same connector pin');
+      assert.deepStrictEqual(rootPackages, ['chrome-devtools-mcp@1.10.1']);
       assert.strictEqual(parsed.mcp_servers['chrome-devtools'].startup_timeout_sec, 30);
       // No retired server may be (re-)emitted — exa's url form broke Codex (#2224).
       assert.strictEqual(parsed.mcp_servers.exa, undefined);
@@ -915,6 +935,51 @@ if (
       assert.match(second.stdout, /\[ok\] mcp_servers\.chrome-devtools/);
       assert.match(second.stdout, /All ECC MCP servers already present/);
       assert.strictEqual(fs.readFileSync(configPath, 'utf8'), merged);
+    } finally {
+      cleanup(tempDir);
+    }
+  })
+)
+  passed++;
+else failed++;
+
+if (
+  test('merge-mcp-config preserves an existing latest entry until explicit recommendation refresh', () => {
+    const tempDir = createTempDir('mcp-merge-explicit-refresh-');
+    const configPath = path.join(tempDir, 'config.toml');
+    const original = [
+      '# User-maintained configuration',
+      '[mcp_servers.chrome-devtools]',
+      'command = "npx"',
+      'args = ["chrome-devtools-mcp@latest", "--custom-browser-argument"]',
+      'startup_timeout_sec = 75',
+      '[mcp_servers.chrome-devtools.env]',
+      'CUSTOM_BROWSER_SETTING = "preserve-until-explicit-refresh"',
+      '',
+      '[mcp_servers.user_tool]',
+      'command = "custom-launcher"',
+      'args = ["--user-setting"]',
+      '',
+    ].join('\n');
+
+    try {
+      fs.writeFileSync(configPath, original);
+      const preserved = runNode(mergeMcpConfigScript, [configPath], deterministicPackageEnv);
+      assert.strictEqual(preserved.status, 0, `${preserved.stdout}\n${preserved.stderr}`);
+      assert.match(preserved.stderr, /chrome-devtools differs from ECC recommendation/);
+      assert.match(preserved.stderr, /--update-mcp to refresh/);
+      assert.strictEqual(fs.readFileSync(configPath, 'utf8'), original,
+        'normal sync must preserve existing latest and customized settings byte-for-byte');
+
+      const refreshed = runNode(mergeMcpConfigScript, [configPath, '--update-mcp'], deterministicPackageEnv);
+      assert.strictEqual(refreshed.status, 0, `${refreshed.stdout}\n${refreshed.stderr}`);
+      assert.match(refreshed.stdout, /\[update\] mcp_servers\.chrome-devtools/);
+      const updated = TOML.parse(fs.readFileSync(configPath, 'utf8'));
+      assert.deepStrictEqual(updated.mcp_servers['chrome-devtools'], {
+        command: 'npx', args: ['chrome-devtools-mcp@1.10.1'], startup_timeout_sec: 30,
+      }, 'explicit refresh replaces the whole recommended section, including custom subsettings');
+      assert.deepStrictEqual(updated.mcp_servers.user_tool, TOML.parse(original).mcp_servers.user_tool,
+        'unrelated user-managed server settings remain untouched');
     } finally {
       cleanup(tempDir);
     }
@@ -1102,7 +1167,7 @@ if (
       assert.strictEqual(syncResult.status, 0, `${syncResult.stdout}\n${syncResult.stderr}`);
 
       const syncedAgents = fs.readFileSync(agentsPath, 'utf8');
-      assert.match(syncedAgents, /^# Everything Claude Code \(ECC\) — Agent Instructions/m);
+      assert.match(syncedAgents, /^# ECC — Agent Instructions/m);
       assert.match(syncedAgents, /^# Codex Supplement \(From ECC \.codex\/AGENTS\.md\)/m);
 
       const syncedConfig = fs.readFileSync(configPath, 'utf8');
