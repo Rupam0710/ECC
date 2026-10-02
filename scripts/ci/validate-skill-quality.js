@@ -10,6 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const yaml = require('js-yaml');
+const { checkQualityRules } = require('./validate-skills');
 
 const STRICT = process.argv.includes('--strict') || process.env.CI_STRICT_SKILLS === '1';
 
@@ -31,21 +32,6 @@ function parseFrontmatter(content) {
   }
 }
 
-const REQUIRED_SECTIONS = [
-  'When to Activate',
-  'Core Concepts',
-  'Examples',
-  'Anti-Patterns',
-  'Best Practices',
-];
-
-const SECRET_PATTERNS = [
-  /(?:api[_-]?key|token|secret|passwd|password|access[_-]?key)[\s:="']+[A-Za-z0-9_-]{8,}/i,
-  /sk_(?:live|test)_[A-Za-z0-9]+/i,
-  /ghp_[A-Za-z0-9]{20,}/i,
-  /xox[baprs]-[A-Za-z0-9-]+/i,
-];
-
 function logInfo(message) {
   console.info(message);
 }
@@ -66,70 +52,6 @@ function readFileSafe(filePath) {
     logError(`${filePath} could not be read: ${message}`);
     return null;
   }
-}
-
-function extractSectionBody(markdown, sectionTitle) {
-  const headingPattern = new RegExp(`^#{1,3}\\s*${sectionTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`);
-  const sectionHeadings = new Set(REQUIRED_SECTIONS.map((title) => title.trim()));
-  const lines = markdown.split(/\r?\n/);
-
-  const result = lines.reduce((acc, line) => {
-    // Once we've passed the target section, stop collecting
-    if (acc.pastTargetSection) {
-      return acc;
-    }
-
-    const trimmed = line.trim();
-    if (!acc.inTargetSection) {
-      if (headingPattern.test(trimmed)) {
-        return { ...acc, inTargetSection: true };
-      }
-      return acc;
-    }
-
-    const nextHeadingMatch = trimmed.match(/^#{1,3}\s*(.+?)\s*$/);
-    if (nextHeadingMatch && sectionHeadings.has(nextHeadingMatch[1].trim())) {
-      return { ...acc, pastTargetSection: true }; // Mark boundary, stop collecting
-    }
-
-    return { ...acc, bodyLines: [...acc.bodyLines, line] };
-  }, { inTargetSection: false, pastTargetSection: false, bodyLines: [] });
-
-  return result.bodyLines.join('\n').trim();
-}
-
-function findMissingSections(markdown) {
-  return REQUIRED_SECTIONS.reduce((missing, section) => {
-    const heading = new RegExp(`^##?\\s*${section.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'm');
-    if (!heading.test(markdown)) {
-      return [...missing, section];
-    }
-    return missing;
-  }, []);
-}
-
-function findEmptySections(markdown) {
-  return REQUIRED_SECTIONS.reduce((empty, section) => {
-    const body = extractSectionBody(markdown, section);
-    const normalized = body.replace(/[`*_~>#\-\s]/g, '').toLowerCase();
-    if (!normalized || ['todo', 'tbd', 'n/a', 'na', 'placeholder'].includes(normalized)) {
-      const heading = new RegExp(`^##?\\s*${section.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'm');
-      if (heading.test(markdown)) {
-        return [...empty, section];
-      }
-    }
-    return empty;
-  }, []);
-}
-
-function scanSecrets(markdown) {
-  return SECRET_PATTERNS.reduce((matches, pattern) => {
-    const result = markdown.match(pattern);
-    if (result) {
-      return [...matches, result[0]];
-    }
-    return matches;
-  }, []);
 }
 
 function getSkillFiles(targetPath) {
@@ -213,26 +135,17 @@ function validateSkillFile(skillFile) {
     }
   }
 
-  const missingSections = findMissingSections(contents);
-  if (missingSections.length > 0) {
-    const missingText = missingSections.join(', ');
-    logError(`${relativePath} is missing required sections: ${missingText}`);
-    ok = false;
-  }
-
-  if (STRICT) {
-    const emptySections = findEmptySections(contents);
-    if (emptySections.length > 0) {
-      const emptyText = emptySections.join(', ');
-      logError(`${relativePath} has empty or placeholder-only required sections: ${emptyText}`);
+  const qualityFindings = checkQualityRules(contents, relativePath, STRICT);
+  for (const finding of qualityFindings) {
+    const message = `${relativePath}:${finding.line} - ${finding.message}`;
+    if (finding.severity === 'error' || STRICT) {
+      logError(message);
+      logInfo(`Fix: ${finding.hint}`);
       ok = false;
+    } else {
+      logWarning(message);
+      logInfo(`Fix: ${finding.hint}`);
     }
-  }
-
-  const badSecrets = scanSecrets(contents);
-  if (badSecrets.length > 0) {
-    logError(`${relativePath} contains ${badSecrets.length} secret-like pattern(s)`);
-    ok = false;
   }
 
   const trimmed = contents.trim();

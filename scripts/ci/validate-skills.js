@@ -535,9 +535,13 @@ function validateSkills() {
   console.log(msg);
 }
 
-try {
-  validateSkills();
-} catch (error) {
-  console.error(`ERROR: ${error.message}`);
-  process.exit(1);
+module.exports = { QUALITY_RULES, checkQualityRules };
+
+if (require.main === module) {
+  try {
+    validateSkills();
+  } catch (error) {
+    console.error(`ERROR: ${error.message}`);
+    process.exit(1);
+  }
 }

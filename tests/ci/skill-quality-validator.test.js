@@ -15,12 +15,12 @@ const { spawnSync } = require('child_process');
 const SCRIPT_PATH = path.join(__dirname, '..', '..', 'scripts', 'ci', 'validate-skills.js');
 const QUALITY_SCRIPT_PATH = path.join(__dirname, '..', '..', 'scripts', 'ci', 'validate-skill-quality.js');
 
-function runValidator(skillsDir, extraArgs = []) {
+function runValidator(skillsDir, extraArgs = [], strict = true) {
   const result = spawnSync('node', [SCRIPT_PATH, skillsDir, ...extraArgs], {
     encoding: 'utf8',
     env: {
       ...process.env,
-      CI_STRICT_SKILLS: '1', // Enable strict mode for quality checks
+      CI_STRICT_SKILLS: strict ? '1' : '0',
     },
   });
 
@@ -31,12 +31,12 @@ function runValidator(skillsDir, extraArgs = []) {
   };
 }
 
-function runStandaloneValidator(skillPath, extraArgs = []) {
+function runStandaloneValidator(skillPath, extraArgs = [], strict = true) {
   const result = spawnSync('node', [QUALITY_SCRIPT_PATH, skillPath, ...extraArgs], {
     encoding: 'utf8',
     env: {
       ...process.env,
-      CI_STRICT_SKILLS: '1', // Enable strict mode for quality checks
+      CI_STRICT_SKILLS: strict ? '1' : '0',
     },
   });
 
@@ -416,6 +416,50 @@ Content in Examples section should NOT be collected into the empty Core Concepts
       const output = result.stderr || result.stdout;
       assert.match(output, /empty|placeholder-only/i, 'Standalone validator should detect empty sections');
       assert.match(output, /Core Concepts/i, 'Should specifically identify Core Concepts as empty');
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  check('standalone and in-tree validators agree on quality-rule verdicts', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-skill-contract-'));
+    try {
+      const skillDir = path.join(tempDir, 'skills', 'contract-skill');
+      const skillFile = path.join(skillDir, 'SKILL.md');
+      const requiredSections = [
+        'When to Activate',
+        'Core Concepts',
+        'Examples',
+        'Anti-Patterns',
+        'Best Practices',
+      ];
+      const body = 'This section contains practical guidance, clear decision criteria, and concrete steps that contributors can apply consistently across real projects. '.repeat(2);
+
+      const createSkill = (sections) => {
+        const content = [
+          '---',
+          'name: contract-skill',
+          'description: A contract fixture for comparing skill validator quality-rule verdicts.',
+          '---',
+          '# Contract Skill',
+          ...sections.flatMap((section) => [`## ${section}`, body]),
+          '',
+        ].join('\n');
+        createTestSkill(skillDir, 'SKILL.md', content);
+      };
+
+      const assertBothVerdicts = (sections, strict, expectedStatus, label) => {
+        createSkill(sections);
+        const inTree = runValidator(path.join(tempDir, 'skills'), [], strict);
+        const standalone = runStandaloneValidator(skillFile, [], strict);
+        assert.strictEqual(inTree.status, expectedStatus, `${label}: in-tree validator verdict`);
+        assert.strictEqual(standalone.status, expectedStatus, `${label}: standalone validator verdict`);
+      };
+
+      const withoutActivation = requiredSections.filter((section) => section !== 'When to Activate');
+      assertBothVerdicts(withoutActivation, false, 0, 'missing section in default mode');
+      assertBothVerdicts(withoutActivation, true, 1, 'missing section in strict mode');
+      assertBothVerdicts(requiredSections.map((section) => section.toUpperCase()), true, 0, 'uppercase headings in strict mode');
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
