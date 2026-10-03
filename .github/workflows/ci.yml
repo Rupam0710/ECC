@@ -214,8 +214,17 @@ jobs:
 
       - name: Validate skill quality (changed skills)
         env:
-          SKILL_QUALITY_BASE: origin/${{ github.base_ref || 'main' }}
-        run: node scripts/ci/validate-skill-quality.js --strict --changed "$SKILL_QUALITY_BASE"
+          PR_BASE_REF: ${{ github.base_ref }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          if [ -n "$PR_BASE_REF" ]; then
+            base="origin/$PR_BASE_REF"
+          elif [ -n "$PUSH_BEFORE_SHA" ] && [ "${PUSH_BEFORE_SHA#0000000}" = "$PUSH_BEFORE_SHA" ]; then
+            base="$PUSH_BEFORE_SHA"
+          else
+            base="HEAD~1"
+          fi
+          node scripts/ci/validate-skill-quality.js --strict --changed "$base"
         continue-on-error: false
 
       - name: Validate install manifests

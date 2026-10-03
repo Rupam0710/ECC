@@ -113,15 +113,15 @@ function parseChangedRef(args) {
 
 function getChangedSkillFiles(baseRef) {
   const git = (args) => spawnSync('git', args, { encoding: 'utf8' });
-  const diff = git(['diff', '--name-only', '--diff-filter=AMR', `${baseRef}...HEAD`, '--', '*SKILL.md']);
+  const diff = git(['diff', '-z', '--name-only', '--diff-filter=AMR', `${baseRef}...HEAD`, '--', '*SKILL.md']);
   if (diff.status !== 0) {
     logError(`Unable to diff against ${baseRef}: ${(diff.stderr || '').trim() || 'git failed'}`);
     return null;
   }
-  const worktree = git(['diff', '--name-only', '--diff-filter=AMR', 'HEAD', '--', '*SKILL.md']);
-  const untracked = git(['ls-files', '--others', '--exclude-standard', '--', '*SKILL.md']);
+  const worktree = git(['diff', '-z', '--name-only', '--diff-filter=AMR', 'HEAD', '--', '*SKILL.md']);
+  const untracked = git(['ls-files', '-z', '--others', '--exclude-standard', '--', '*SKILL.md']);
   const names = [diff, worktree, untracked]
-    .flatMap((result) => (result.stdout || '').split('\n'))
+    .flatMap((result) => (result.stdout || '').split('\0'))
     .filter((name) => path.basename(name) === 'SKILL.md' && name.split('/')[0] === 'skills');
 
   return [...new Set(names)]

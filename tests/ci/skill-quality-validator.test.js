@@ -617,9 +617,9 @@ ${'Use checks that are repeatable, specific, and easy to review. '.repeat(4)}
       assert.strictEqual(runChanged().status, 0, 'Untouched legacy skills must not be gated');
 
       createTestSkill(
-        path.join(tempDir, 'skills', 'new-skill'),
+        path.join(tempDir, 'skills', 'café-skill'),
         'SKILL.md',
-        '---\nname: new-skill\ndescription: New skill missing sections.\n---\n# New\n\napi_key="actualcredentialvalue12345"\n'
+        '---\nname: café-skill\ndescription: New skill missing sections.\n---\n# New\n\napi_key="actualcredentialvalue12345"\n'
       );
       git('add', '.');
       git('commit', '-qm', 'add skill');
