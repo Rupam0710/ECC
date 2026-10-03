@@ -185,6 +185,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Setup Node.js
@@ -209,6 +210,12 @@ jobs:
 
       - name: Validate skills
         run: node scripts/ci/validate-skills.js
+        continue-on-error: false
+
+      - name: Validate skill quality (changed skills)
+        env:
+          SKILL_QUALITY_BASE: origin/${{ github.base_ref || 'main' }}
+        run: node scripts/ci/validate-skill-quality.js --strict --changed "$SKILL_QUALITY_BASE"
         continue-on-error: false
 
       - name: Validate install manifests

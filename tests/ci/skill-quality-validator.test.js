@@ -591,6 +591,48 @@ ${'Use checks that are repeatable, specific, and easy to review. '.repeat(4)}
     }
   });
 
+  check('--changed gates only skills added since the base ref', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-skill-changed-'));
+    const git = (...args) => {
+      const r = spawnSync('git', args, { cwd: tempDir, encoding: 'utf8' });
+      assert.strictEqual(r.status, 0, r.stderr);
+    };
+    const runChanged = () => {
+      const r = spawnSync('node', [QUALITY_SCRIPT_PATH, '--strict', '--changed', 'base'], {
+        cwd: tempDir,
+        encoding: 'utf8',
+      });
+      return { status: r.status ?? 1, output: `${r.stdout}\n${r.stderr}` };
+    };
+    try {
+      // Pre-existing legacy skill that would fail the quality rules.
+      createTestSkill(path.join(tempDir, 'skills', 'legacy'), 'SKILL.md', '---\nname: legacy\ndescription: old\n---\n# Legacy\n');
+      git('init', '-q');
+      git('config', 'user.email', 't@example.com');
+      git('config', 'user.name', 't');
+      git('add', '.');
+      git('commit', '-qm', 'base');
+      git('tag', 'base');
+
+      assert.strictEqual(runChanged().status, 0, 'Untouched legacy skills must not be gated');
+
+      createTestSkill(
+        path.join(tempDir, 'skills', 'new-skill'),
+        'SKILL.md',
+        '---\nname: new-skill\ndescription: New skill missing sections.\n---\n# New\n\napi_key="actualcredentialvalue12345"\n'
+      );
+      git('add', '.');
+      git('commit', '-qm', 'add skill');
+
+      const result = runChanged();
+      assert.notStrictEqual(result.status, 0, 'Expected newly added bad skill to fail');
+      assert.match(result.output, /Missing required section: "When to Activate"/);
+      assert.match(result.output, /secret-like pattern/i);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   console.log(`\nPassed: ${passed}`);
   console.log(`Failed: ${failed}`);
   process.exit(failed > 0 ? 1 : 0);

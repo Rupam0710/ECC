@@ -9,6 +9,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 const yaml = require('js-yaml');
 const { checkQualityRules } = require('./skill-quality-rules');
 
@@ -101,6 +102,34 @@ function getSkillFiles(targetPath) {
   return { files: files.sort(), unreadablePaths };
 }
 
+function parseChangedRef(args) {
+  const inline = args.find((arg) => arg.startsWith('--changed='));
+  if (inline) return inline.slice('--changed='.length) || null;
+  const index = args.indexOf('--changed');
+  if (index === -1) return null;
+  const next = args[index + 1];
+  return next && !next.startsWith('--') ? next : null;
+}
+
+function getChangedSkillFiles(baseRef) {
+  const git = (args) => spawnSync('git', args, { encoding: 'utf8' });
+  const diff = git(['diff', '--name-only', '--diff-filter=AMR', `${baseRef}...HEAD`, '--', '*SKILL.md']);
+  if (diff.status !== 0) {
+    logError(`Unable to diff against ${baseRef}: ${(diff.stderr || '').trim() || 'git failed'}`);
+    return null;
+  }
+  const worktree = git(['diff', '--name-only', '--diff-filter=AMR', 'HEAD', '--', '*SKILL.md']);
+  const untracked = git(['ls-files', '--others', '--exclude-standard', '--', '*SKILL.md']);
+  const names = [diff, worktree, untracked]
+    .flatMap((result) => (result.stdout || '').split('\n'))
+    .filter((name) => path.basename(name) === 'SKILL.md' && name.split('/')[0] === 'skills');
+
+  return [...new Set(names)]
+    .map((name) => path.resolve(process.cwd(), name))
+    .filter((file) => fs.existsSync(file))
+    .sort();
+}
+
 function validateSkillFile(skillFile) {
   const relativePath = path.relative(process.cwd(), skillFile) || skillFile;
   const contents = readFileSafe(skillFile);
@@ -163,6 +192,24 @@ function validateSkillFile(skillFile) {
 }
 
 function main() {
+  const changedRef = parseChangedRef(process.argv.slice(2));
+  if (process.argv.includes('--changed') || process.argv.some((arg) => arg.startsWith('--changed='))) {
+    if (!changedRef) {
+      logError('--changed requires a base ref, e.g. --changed origin/main');
+      process.exit(1);
+    }
+    const changedFiles = getChangedSkillFiles(changedRef);
+    if (changedFiles === null) process.exit(1);
+    if (changedFiles.length === 0) {
+      logInfo(`No added or modified skill files since ${changedRef}`);
+      process.exit(0);
+    }
+    const failed = changedFiles.map(validateSkillFile).includes(false);
+    if (failed) process.exit(1);
+    logInfo(`Validated ${changedFiles.length} changed skill file(s) successfully.`);
+    process.exit(0);
+  }
+
   const cliArgs = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
   const explicitTarget = cliArgs[0] || process.env.ECC_SKILLS_DIR || 'skills';
   const targetPath = path.resolve(process.cwd(), explicitTarget);
